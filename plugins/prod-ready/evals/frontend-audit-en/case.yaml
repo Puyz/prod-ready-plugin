@@ -1,0 +1,13 @@
+schema_version: "1.1"
+name: frontend-audit-en
+description: English-language audit of the flawed Next.js site for an EU-only launch; checks coverage, verdict, EU privacy routing and report language.
+tags: [audit, frontend, english]
+runs: 2
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Read, Glob, Grep, Skill]
+  prompt: |
+    sample-app/web is our marketing site with a login, launching next week for customers in the EU. Is the frontend ready for production? Audit it and report. Don't change any files.

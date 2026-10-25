@@ -1,91 +1,91 @@
-# Node.js (Express / NestJS / Next.js route handlers) uygulama notları
+# Node.js (Express / NestJS / Next.js route handlers) implementation notes
 
-## B01 Parola
+## B01 Passwords
 ```js
 import argon2 from 'argon2';
 const hash = await argon2.hash(password, { type: argon2.argon2id });
 const ok = await argon2.verify(user.passwordHash, password);
 ```
-- Kullanıcı bulunamadığında da sahte bir `argon2.verify` çağır, böylece yanıt süresi kullanıcının var olup olmadığını ele vermez (B07).
-- Parolaya üst uzunluk sınırı koy (ör. `z.string().max(1024)`). Megabaytlık bir parola girdisi argon2'yi meşgul ederek CPU DoS'a yol açar.
+- When the user is not found, still call `argon2.verify` against a dummy hash so the response time does not reveal whether the user exists (B07).
+- Put a maximum length on passwords (e.g. `z.string().max(1024)`). A megabyte-sized password keeps argon2 busy and becomes a CPU DoS.
 
-## B02/B03/B25 Cookie + kısa ömürlü token + refresh rotation
+## B02/B03/B25 Cookies + short-lived tokens + refresh rotation
 ```js
 res.cookie('__Host-session', accessToken, { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 15 * 60_000 });
-// __Host- öneki Path=/ ister; path daraltılmış refresh cookie'si bu yüzden __Secure- ile başlar.
-// Path=/auth kullan: /auth/refresh'e daraltırsan /auth/logout cookie'yi alamaz ve iptal edemez.
+// __Host- requires Path=/, so a path-scoped refresh cookie uses __Secure- instead.
+// Use Path=/auth: scoping it to /auth/refresh means /auth/logout never receives it and cannot revoke it.
 res.cookie('__Secure-refresh', refreshToken, { httpOnly: true, secure: true, sameSite: 'strict', path: '/auth', maxAge: 30 * 864e5 });
 ```
-- Refresh token'ı `crypto.randomBytes(32).toString('base64url')` ile üret. DB'de `sha256(token)` sakla. Token yüksek entropili olduğu için SHA-256 burada yeterli; parola için yeterli değil.
-- `/auth/refresh` adımları **tek transaction** içinde çalışmalı:
-  1. Kaydı koşullu güncelle: `UPDATE ... SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING ...`
-  2. Hiç satır dönmezse ya reuse ya da süre dolması vardır. O ailenin tüm token'larını sil ve 401 dön.
-  3. Satır dönerse aynı `family_id` ve aynı mutlak `expires_at` ile yeni token çiftini üret.
-  4. Commit et. Cookie'leri yalnızca commit başarılı olduktan sonra set et.
-- İki sekme aynı anda refresh yaparsa ikincisi reuse sayılır ve kullanıcı çıkış yapmış olur. Bu davranış ya kabul edilir ya da birkaç saniyelik bir tolerans penceresi tanımlanır. Hangisini seçtiğini dokümante et.
-- Süresi dolmuş satırlar için periyodik `DELETE ... WHERE expires_at < now()` job'u kur.
-- Logout'ta (B04) cookie'deki token'ın ailesini sil ve cookie'leri temizle. Parola değişince kullanıcının tüm ailelerini sil.
+- Generate refresh tokens with `crypto.randomBytes(32).toString('base64url')` and store `sha256(token)` in the DB. SHA-256 is fine here because the token has high entropy; it is not fine for passwords.
+- The `/auth/refresh` steps must run in **one transaction**:
+  1. Conditionally update the row: `UPDATE ... SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING ...`
+  2. If no row comes back, this is either reuse or expiry. Delete every token in that family and return 401.
+  3. If a row comes back, issue a new token pair with the same `family_id` and the same absolute `expires_at`.
+  4. Commit. Set the cookies only after the commit succeeds.
+- If two tabs refresh at the same moment, the second counts as reuse and the user is logged out. Either accept this or allow a grace window of a few seconds, and document which you chose.
+- Schedule a periodic `DELETE ... WHERE expires_at < now()` job for expired rows.
+- On logout (B04), delete the family of the token in the cookie and clear the cookies. On password change, delete all of the user's families.
 
 ## B05 JWT
 ```js
 jwt.sign(payload, key, { algorithm: 'HS256', expiresIn: '15m', issuer: ISS, audience: AUD });
 jwt.verify(token, key, { algorithms: ['HS256'], issuer: ISS, audience: AUD });
 ```
-`key` için `crypto.randomBytes(32)` ile üretilip env'den okunan bir değer kullanılmalı. Varsa bir `jsonwebtoken@<9` sürümü bilinen CVE'lere sahiptir, güncelle.
+`key` must be generated with `crypto.randomBytes(32)` and read from env. `jsonwebtoken` versions below 9 have known CVEs; upgrade.
 
-## B06/B26 Rate limit + kaynak sınırları
+## B06/B26 Rate limits + resource caps
 ```js
 import { rateLimit } from 'express-rate-limit';
-app.set('trust proxy', 1);                        // tam olarak önündeki proxy sayısı kadar
+app.set('trust proxy', 1);                        // exactly the number of proxies in front of the app
 app.use(express.json({ limit: '100kb' }));
 app.use(rateLimit({ windowMs: 60_000, limit: 100, standardHeaders: 'draft-7', legacyHeaders: false }));
 const loginIp = rateLimit({ windowMs: 15 * 60_000, limit: 20 });
-const loginAccount = rateLimit({ windowMs: 15 * 60_000, limit: 5, skipSuccessfulRequests: true,   // yalnızca başarısızları say
+const loginAccount = rateLimit({ windowMs: 15 * 60_000, limit: 5, skipSuccessfulRequests: true,   // count failures only
   keyGenerator: (req) => 'acct:' + String(req.body?.email ?? '').trim().toLowerCase() });
 app.post('/auth/login', loginIp, loginAccount, login);
 ```
-Birden fazla instance çalışıyorsa limiter'a Redis store bağla (`rate-limit-redis`).
+With more than one instance, back the limiter with a Redis store (`rate-limit-redis`).
 
-## B10/B11/B12 Varsayılan deny + sahiplik
+## B10/B11/B12 Deny by default + ownership
 ```js
-app.use('/api', requireAuth);                     // public route'lar bu satırdan ÖNCE tanımlanır
+app.use('/api', requireAuth);                     // public routes are defined BEFORE this line
 app.get('/api/orders/:id', async (req, res) => {
   const { rows } = await db.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
   if (!rows[0]) return res.sendStatus(404);
   res.json(toDto(rows[0]));
 });
 ```
-`req.user` yalnızca doğrulanmış session veya token'dan doldurulur. `req.headers['x-role']` gibi değerler asla kullanılmaz.
-NestJS'te global `APP_GUARD` + `@Public()` decorator deseni kullanılır.
+`req.user` is populated only from the verified session or token. Values such as `req.headers['x-role']` are never used.
+In NestJS, use a global `APP_GUARD` plus a `@Public()` decorator.
 
-## B13/B15 Validation + allowlist
+## B13/B15 Validation + allowlists
 ```js
 const UpdateProfile = z.object({ displayName: z.string().min(1).max(80), bio: z.string().max(500).optional() }).strict();
 const parsed = UpdateProfile.safeParse(req.body);
-if (!parsed.success) return res.status(400).json({ error: 'Geçersiz veri' });
+if (!parsed.success) return res.status(400).json({ error: 'Invalid input' });
 ```
-NestJS'te `new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })` kullan.
+In NestJS, use `new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })`.
 
 ## B16 SQL
-- Dinamik kolon veya sıralama için allowlist kullan:
+- Use an allowlist for dynamic columns or sorting:
   ```js
   const SORTS = { created: 'created_at', total: 'total' };
   const col = SORTS[req.query.sort] ?? 'created_at';
   ```
-  Değerler her zaman `$1`, `$2` gibi parametrelerle verilir.
-- Prisma'da `$queryRaw` tagged template olarak güvenlidir, `$queryRawUnsafe` ise güvensizdir.
+  Values are always passed as parameters such as `$1`, `$2`.
+- In Prisma, `$queryRaw` as a tagged template is safe; `$queryRawUnsafe` is not.
 
 ## B18 SSRF
-- Kullanıcının verdiği URL'de yalnızca `https:` şemasına izin ver.
-- Host'u DNS ile çöz. `ipaddr.js` ile `ipaddr.parse(ip).range() === 'unicast'` değilse isteği reddet. Bu kontrol private, loopback, link-local ve 169.254.169.254'ü kapsar.
-- Doğrulanan IP ile bağlanılan IP aynı olmalı (DNS rebinding'e karşı). Bunun için kontrolü HTTP agent'ın `lookup` fonksiyonunda yap.
-- `redirect: 'manual'` kullan.
-- Endpoint auth ve rate limit arkasında olmalı.
+- Allow only the `https:` scheme in user-supplied URLs.
+- Resolve the host via DNS. Reject the request unless `ipaddr.parse(ip).range() === 'unicast'` (`ipaddr.js`). This covers private, loopback, link-local and 169.254.169.254.
+- The IP you validated must be the IP you connect to (DNS rebinding). Do the check in the HTTP agent's `lookup` function.
+- Use `redirect: 'manual'`.
+- Keep the endpoint behind auth and a rate limit.
 
 ## B21 CSRF (cookie auth)
-`csurf` paketi deprecated. Yerine şunlardan birini kullan:
+`csurf` is deprecated. Use one of these instead:
 - `csrf-csrf` (double-submit)
-- SameSite cookie ile birlikte Origin kontrolü:
+- An Origin check together with SameSite cookies:
 ```js
 app.use((req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
@@ -93,46 +93,46 @@ app.use((req, res, next) => {
   next();
 });
 ```
-Bu kontrol Origin header'ı göndermeyen istemcileri de reddeder (server-to-server çağrılar, curl). Yalnızca tarayıcının kullandığı API'lerde uygula. Diğer istemciler için ayrı bir auth yolu tanımla (ör. API key ile Bearer).
+This also rejects clients that send no Origin header (server-to-server calls, curl). Apply it only to browser-facing APIs and give other clients a separate auth path (e.g. API keys as Bearer).
 
 ## B22/B24 CORS + headers
 ```js
-app.use(helmet());                                // nosniff, frameguard, HSTS, x-powered-by kaldırma vb.
+app.use(helmet());                                // nosniff, frameguard, HSTS, removes x-powered-by, etc.
 app.use(cors({ origin: process.env.CORS_ORIGINS.split(','), credentials: true }));
 ```
-`origin: true` gelen origin'i aynen geri yansıtır. Bu, credentials ile birlikte kullanıldığında ❌'dir.
+`origin: true` reflects the incoming origin back. Combined with credentials, that is ❌.
 
 ## B27 Upload (multer)
 ```js
 const ALLOWED = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
 // handler:
-const type = await fileTypeFromBuffer(req.file.buffer);           // 'file-type' paketi (ESM), magic bytes
-if (!type || !ALLOWED[type.mime]) return res.status(400).json({ error: 'Desteklenmeyen dosya' });
-const key = crypto.randomUUID() + ALLOWED[type.mime];             // originalname dosya yolunda kullanılmaz
-// sharp ile re-encode → private bucket'a koy → signed URL dön
+const type = await fileTypeFromBuffer(req.file.buffer);           // 'file-type' package (ESM), magic bytes
+if (!type || !ALLOWED[type.mime]) return res.status(400).json({ error: 'Unsupported file' });
+const key = crypto.randomUUID() + ALLOWED[type.mime];             // originalname is never used in a path
+// re-encode with sharp → put in a private bucket → return a signed URL
 ```
-multer'ın 2.x öncesi sürümlerinde DoS CVE'leri var.
+multer versions before 2.x have DoS CVEs.
 
-## B29 Hata yönetimi
-- Express 4 async hataları yakalamaz. Ya Express 5'e geç ya da her handler'ı `wrap(fn)` ile sarmala.
+## B29 Error handling
+- Express 4 does not catch async errors. Either move to Express 5 or wrap every handler with `wrap(fn)`.
 ```js
 app.use((err, req, res, next) => {
   const id = crypto.randomUUID();
   logger.error({ err, id, path: req.path });
-  res.status(500).json({ error: 'Beklenmeyen bir hata oluştu', correlationId: id });
+  res.status(500).json({ error: 'Unexpected error', correlationId: id });
 });
-process.on('unhandledRejection', (e) => logger.fatal(e));        // log'la; supervisor process'i yeniden başlatsın
+process.on('unhandledRejection', (e) => logger.fatal(e));        // log it; let the supervisor restart the process
 ```
 
 ## B28/B30/B36/B38
-- `.env` içeriği `.gitignore`'a eklenmeli ve repoda `.env.example` bulunmalı. Prod'da secret'lar platform env'inden veya secret manager'dan okunmalı.
-- Prod'da `NODE_ENV=production` set edilmeli.
-- Bağımlılık açıkları için `npm audit --omit=dev` çalıştırılmalı ve lockfile commit edilmeli.
-- Health endpoint'i yalnızca durum dönmeli: `app.get('/health', (req, res) => res.json({ status: 'ok' }))`. Env, versiyon ve connection string döndürülmemeli.
+- Add `.env` to `.gitignore` and keep a `.env.example` in the repo. In production, read secrets from the platform env or a secret manager.
+- Set `NODE_ENV=production` in production.
+- Run `npm audit --omit=dev` for dependency vulnerabilities and commit the lockfile.
+- The health endpoint returns only the status: `app.get('/health', (req, res) => res.json({ status: 'ok' }))`. Never env, versions or connection strings.
 
 ## Next.js route handlers / server actions
-- Her handler ve server action kendi auth ve sahiplik kontrolünü yapmalı. Middleware tek başına güvenlik sınırı değildir; CVE-2025-29927 middleware bypass'ı buna örnektir.
-- Girdiler zod ile doğrulanmalı.
-- Cookie'ler `(await cookies()).set(name, value, { httpOnly: true, secure: true, sameSite: 'lax' })` ile yazılmalı. Next 15 ve sonrasında `cookies()` async'tir.
-- Secret'lar `NEXT_PUBLIC_` önekli değişkenlerde tutulmamalı.
+- Every handler and server action does its own auth and ownership check. Middleware/proxy alone is not a security boundary; the CVE-2025-29927 middleware bypass is an example.
+- Validate input with zod.
+- Write cookies with `(await cookies()).set(name, value, { httpOnly: true, secure: true, sameSite: 'lax' })`. `cookies()` is async from Next 15 on.
+- Never keep secrets in `NEXT_PUBLIC_` variables.

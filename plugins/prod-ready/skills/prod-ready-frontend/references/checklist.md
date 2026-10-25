@@ -1,181 +1,179 @@
-# Frontend checklist — detaylar
+# Frontend checklist — details
 
-Her madde şu bölümlerden oluşur: **Doğrula**, **Geçer**, **Tuzak**. Grep sonuçları yalnızca başlangıç noktasıdır; eşleşen her yeri ayrıca oku.
+Each item has **Verify**, **Pass** and **Pitfall** parts. Grep results are only a starting point; read every match.
 
-## Güvenlik
+## Security
 
-### F01 — Bundle'da secret (BLOCKER)
-- **Doğrula:**
-  - `.env*` dosyalarında ve kodda `NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_` önekli değişkenleri bul. Her birine "bu değer herkes tarafından görülse sorun olur mu?" diye sor.
-  - Build sonrası çıktıyı tara: `grep -rE "sk_live|sk-|AKIA|secret|private_key" .next/static dist build`
-- **Puanlama:** Önekli bir değişkende secret varsa durum ❌ olur, değer şu an bundle'a girmese bile. Önek, değerin client koduna girebileceğini beyan eder ve tek bir client import'u onu sızdırmaya yeter. Build taraması gerçek sızıntıyı teyit eder. `.gitignore` kontrolü F29'da yapılır.
-- **Geçer:** Public değişkenlerde yalnızca public değerler var: publishable key, public API URL, analytics ID. Secret gerektiren çağrılar sunucuda (route handler veya BFF) yapılıyor.
-- **Tuzak:** Sızmış bir key'i yalnızca env'den taşımak yetmez. Key zaten bundle'da yayılmıştır, önce **rotate** edilmeli.
+### F01 — Secrets in the bundle (BLOCKER)
+- **Verify:**
+  - Find variables prefixed `NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_` in `.env*` files and code. For each one ask: "would it matter if everyone saw this value?"
+  - Scan the build output: `grep -rE "sk_live|sk-|AKIA|secret|private_key" .next/static dist build`
+- **Scoring:** a secret in a prefixed variable is ❌ even if the value is not in the bundle right now. The prefix declares that the value may enter client code, and a single client import is enough to leak it. The build scan confirms an actual leak. `.gitignore` is checked under F29.
+- **Pass:** public variables hold only public values: publishable keys, public API URLs, analytics IDs. Calls that need secrets run on the server (route handler or BFF).
+- **Pitfall:** moving a leaked key out of env is not enough. It has already shipped in the bundle; **rotate** it first.
 
-### F02 — Token saklama (BLOCKER)
-- **Doğrula:** `localStorage|sessionStorage` + `token|jwt|auth` geçen yerleri ara. Axios veya fetch interceptor'larında `Authorization: Bearer` ekleniyor mu?
-- **Geçer:** Auth httpOnly cookie ile taşınıyor ve istekler `credentials: 'include'` ile yapılıyor. JS token'ı hiç görmüyor. State değiştiren isteklerde backend'in beklediği CSRF token'ı veya custom header gönderiliyor (B21).
+### F02 — Token storage (BLOCKER)
+- **Verify:** search for `localStorage|sessionStorage` together with `token|jwt|auth`. Do axios or fetch interceptors add `Authorization: Bearer`?
+- **Pass:** auth travels in an httpOnly cookie and requests use `credentials: 'include'`. JS never sees the token. State-changing requests send the CSRF token or custom header the backend expects (B21).
 
 ### F03 — XSS (BLOCKER)
-- **Doğrula:** `dangerouslySetInnerHTML|v-html|innerHTML|outerHTML|insertAdjacentHTML|document.write|eval\(` desenlerini ara. Kullanıcıdan gelen değerlerin `href`/`src` attribute'larına nasıl girdiğine bak.
-- **Geçer:** HTML basmadan önce `DOMPurify.sanitize` çağrılıyor. URL'ler `new URL(u).protocol` ile `http:` veya `https:` olarak kontrol ediliyor. Kullanıcı verisi `eval`'e ya da string olarak `setTimeout`'a gitmiyor.
+- **Verify:** search for `dangerouslySetInnerHTML|v-html|innerHTML|outerHTML|insertAdjacentHTML|document.write|eval\(`. Check how user-supplied values reach `href`/`src` attributes.
+- **Pass:** `DOMPurify.sanitize` runs before HTML is rendered. URLs are checked with `new URL(u).protocol` to be `http:` or `https:`. User data never reaches `eval` or string-form `setTimeout`.
 
-### F04 — CSP, güvenlik header'ları ve 3. parti kod (HIGH)
-- **Geçer:**
-  - CSP header'ı var. `script-src` nonce veya hash kullanıyor; `'unsafe-inline'` yok.
-  - `frame-ancestors` tanımlı.
-  - HSTS, `X-Content-Type-Options: nosniff` ve `Referrer-Policy` dönüyor. Bunlar uygulama config'inde veya hosting'de tanımlı olabilir.
-  - Yüklenen 3. parti script'lerin listesi ve her birinin ne işe yaradığı belli.
-  - Sabit sürüm CDN script'lerinde `integrity` (SRI) var.
-- **Puanlama:**
-  - CSP var ama `'unsafe-inline'` veya `*` içeriyorsa ⚠️.
-  - Header'lar hosting'de tanımlıysa ve koddan görünmüyorsa ❓.
-  - `rel="noopener"` eksikliği tek başına ⚠️ sebebi değildir; modern tarayıcılar bunu varsayılan uygular. Düzeltme sütununda an.
+### F04 — CSP, security headers and third-party code (HIGH)
+- **Pass:**
+  - A CSP header exists. `script-src` uses nonces or hashes; no `'unsafe-inline'`.
+  - `frame-ancestors` set.
+  - HSTS, `X-Content-Type-Options: nosniff` and `Referrer-Policy` returned. These may be set in app config or at the host.
+  - A list of loaded third-party scripts and what each one does.
+  - `integrity` (SRI) on pinned CDN scripts.
+- **Scoring:**
+  - CSP present but containing `'unsafe-inline'` or `*` → ⚠️.
+  - Headers configured at the host and not visible in code → ❓.
+  - A missing `rel="noopener"` alone is not a reason for ⚠️; modern browsers apply it by default. Mention it in the fix column.
 
-### F05 — Build hijyeni (HIGH)
-- **Doğrula:**
-  - `productionBrowserSourceMaps`, `build.sourcemap: true` ayarları açık mı? `.map` dosyaları public servis ediliyor mu?
-  - `console.log` ile token veya kullanıcı verisi yazdırılıyor mu?
-  - `http://` ile başlayan API ya da asset URL'i var mı?
-- **Geçer:** Source map ya hiç üretilmiyor ya da yalnızca hata takip aracına (F16) gidiyor. Prod'da console'a veri yazılmıyor. Tüm istekler HTTPS üzerinden.
+### F05 — Build hygiene (HIGH)
+- **Verify:**
+  - Are `productionBrowserSourceMaps` or `build.sourcemap: true` enabled? Are `.map` files served publicly?
+  - Does `console.log` print tokens or user data?
+  - Any API or asset URLs starting with `http://`?
+- **Pass:** source maps are either not produced or sent only to the error tracker (F16). Nothing is written to the console in production. Every request goes over HTTPS.
 
-### F06 — UI yetki gizleme (HIGH)
-- **Geçer:** Admin butonunu gizlemek yalnızca UX içindir. Her aksiyonun backend'de yetki kontrolü var (B10–B12). Client'ta tutulan rol bilgisi güvenlik kararı için kullanılmıyor.
+### F06 — Permission-based UI hiding (HIGH)
+- **Pass:** hiding an admin button is UX only. Every action has a backend authorization check (B10–B12). A role held on the client is never used for a security decision.
 
-### F07 — Spam/bot (HIGH)
-- **Geçer:** Oturum açmadan kullanılabilen formlarda (login, kayıt, iletişim, yorum, bülten) honeypot alanı veya CAPTCHA var (Turnstile, reCAPTCHA, hCaptcha). Login'de CAPTCHA'nın yalnızca birkaç başarısız denemeden sonra çıkması kabul edilir. CAPTCHA token'ı **sunucuda** doğrulanıyor. Endpoint'te rate limit var.
+### F07 — Spam and bots (HIGH)
+- **Pass:** forms usable without logging in (login, sign-up, contact, comments, newsletter) have a honeypot field or CAPTCHA (Turnstile, reCAPTCHA, hCaptcha). Showing a CAPTCHA on login only after a few failed attempts is acceptable. The CAPTCHA token is verified **on the server**. The endpoint is rate-limited.
 
-## SEO ve paylaşım
+## SEO and sharing
 
 ### F08 — Meta (HIGH)
-- **Doğrula:**
-  - Her route'ta title ve description var mı? Değerleri sayfadan sayfaya farklı mı? Dinamik sayfalarda (`/post/[id]`) içerikten üretiliyor mu?
-  - `<html lang="tr">` tanımlı mı?
-  - `rel=canonical` var mı?
-- **Geçer:** Title ~50–60 karakter, description ~150–160 karakter. Title'lar marka adını içeriyor ve birbirini tekrar etmiyor. Canonical ve lang tanımlı. Çok dilli sitelerde her dil sürümü `hreflang` ile birbirine bağlı (Next'te `alternates.languages`).
+- **Verify:**
+  - Does every route have a title and description? Do they differ from page to page? Are dynamic pages (`/post/[id]`) generated from content?
+  - Is `<html lang="...">` set?
+  - Is `rel=canonical` present?
+- **Pass:** title ~50–60 chars, description ~150–160 chars. Titles include the brand and don't repeat each other. Canonical and lang set. On multilingual sites every language version is linked with `hreflang` (`alternates.languages` in Next).
 
 ### F09 — robots.txt (HIGH)
-- **Geçer:**
-  - Prod'da `Disallow: /` yok.
-  - Admin veya gizli yollar listede yok (bu, yolları herkese ilan eder).
-  - `Sitemap: https://.../sitemap.xml` satırı var.
-  - Staging ve preview ortamları `X-Robots-Tag: noindex` ile işaretli ve basic auth arkasında.
-- **Tuzak:** Staging'deki `Disallow: /` dosyası prod'a da kopyalanıyor. Ortama göre üretilmesi gerekir.
+- **Pass:**
+  - No `Disallow: /` in production.
+  - No admin or hidden paths listed (listing them announces them).
+  - A `Sitemap: https://.../sitemap.xml` line.
+  - Staging and preview environments send `X-Robots-Tag: noindex` and sit behind basic auth.
+- **Pitfall:** the staging `Disallow: /` file gets copied to production. Generate it per environment.
 
 ### F10 — sitemap.xml (MEDIUM)
-- **Geçer:** Yalnızca 200 dönen, canonical ve index'lenebilir URL'leri içeriyor. Login, admin ve teşekkür sayfaları sitemap'te yok. Search Console'a gönderilmiş (gönderim ❓ olarak sorulur).
+- **Pass:** lists only canonical, indexable URLs that return 200. Login, admin and thank-you pages are excluded. Submitted to Search Console (submission asked as ❓).
 
 ### F11 — Open Graph (MEDIUM)
-- **Geçer:** `og:title`, `og:description`, `og:image` (1200×630, mutlak HTTPS URL), `og:url` ve `twitter:card=summary_large_image` tanımlı.
+- **Pass:** `og:title`, `og:description`, `og:image` (1200×630, absolute HTTPS URL), `og:url` and `twitter:card=summary_large_image` set.
 
-### F12 — İkonlar (MEDIUM)
-- **Geçer:** `favicon.ico` veya svg, `apple-touch-icon` (180×180) ve `manifest.webmanifest` var.
+### F12 — Icons (MEDIUM)
+- **Pass:** `favicon.ico` or svg, `apple-touch-icon` (180×180) and `manifest.webmanifest` present.
 
-## Hata ve durum ekranları
+## Error and state screens
 
 ### F13 — 404/500 (HIGH)
-- **Doğrula:** Özel bir 404 sayfası var mı? Bilinmeyen bir route gerçekten 404 status kodu dönüyor mu? SPA'larda hosting her yolu 200 ile `index.html`'e yönlendirir, bu durum soft 404'tür. 500 hatası ve error boundary var mı?
-- **Geçer:** Markaya uygun 404 sayfası ana sayfaya ve aramaya link veriyor, status kodu 404. Özel 500 sayfası var. Bileşen hataları beyaz ekrana yol açmıyor.
+- **Verify:** is there a custom 404 page? Does an unknown route really return status 404? SPA hosts often rewrite every path to `index.html` with 200; that is a soft 404. Is there a 500 page and an error boundary?
+- **Pass:** a branded 404 page links to the home page and search, with status 404. A custom 500 page exists. Component errors never produce a blank white screen.
 
 ### F14 — Loading (HIGH)
-- **Geçer:** Veri çeken her ekranda skeleton veya spinner var. Submit sırasında buton disabled ve "Gönderiliyor…" gibi bir metin gösteriyor. Uzun işlemlerde iptal veya timeout var.
+- **Pass:** every data-fetching screen has a skeleton or spinner. While submitting, the button is disabled and shows text such as "Sending…". Long operations have cancel or timeout.
 
-### F15 — Form hataları (HIGH)
-- **Geçer:**
-  - Hata mesajı alanın yanında görünüyor ve `aria-describedby` ile o alana bağlı. Alan `aria-invalid` ile işaretli. Focus ilk hatalı alana gidiyor.
-  - Sunucu hatasında kullanıcının girdiği değerler korunuyor.
-  - `res.ok` kontrol ediliyor. Hata durumunda başarı akışı (redirect, token kaydetme vb.) çalışmıyor.
-  - `alert()` kullanılmıyor.
-  - Kullanıcıya teknik hata metni değil, anlaşılır bir mesaj gösteriliyor.
-  - Inputlarda doğru `type`, `autocomplete` ve `inputmode` değerleri var.
+### F15 — Form errors (HIGH)
+- **Pass:**
+  - The error message appears next to the field and is linked with `aria-describedby`. The field is marked `aria-invalid`. Focus moves to the first invalid field.
+  - User input is preserved on server errors.
+  - `res.ok` is checked. On error, the success path (redirect, storing a token, etc.) does not run.
+  - No `alert()`.
+  - Users see a clear message, not technical error text.
+  - Inputs have the right `type`, `autocomplete` and `inputmode`.
 
-### F16 — Hata takibi (HIGH)
-- **Geçer:** Sentry veya benzeri bir araç kurulu. Release etiketleri ve source map yüklemesi yapılıyor. PII scrub ayarları açık. Alarm kuralları tanımlı.
+### F16 — Error tracking (HIGH)
+- **Pass:** Sentry or similar installed. Releases tagged and source maps uploaded. PII scrubbing on. Alert rules defined.
 
-## Hukuk (KVKK + GDPR)
+## Privacy and legal
 
-### F17 — Çerez onayı (BLOCKER)
-- **Doğrula:** GA, GTM, Meta Pixel, Hotjar, Clarity gibi script'ler nerede ve hangi koşulla yükleniyor? Onaydan önce ağ isteği gidiyor mu? DevTools'ta Network ve Cookies sekmelerine ilk yüklemede bak.
-- **Geçer:**
-  - İlk ziyarette yalnızca zorunlu çerezler var.
-  - Banner'da "Kabul et", "Reddet" ve "Tercihler" seçenekleri eşit ağırlıkta. Önceden işaretli kutu yok.
-  - Kullanıcının seçimi kaydediliyor ve footer'daki "Çerez tercihleri" linkiyle değiştirilebiliyor.
-  - Google araçları Consent Mode v2 ile çalışıyor: varsayılan değer `denied`.
-- **Tuzak:** "Siteyi kullanarak çerezleri kabul etmiş sayılırsınız" ifadesi geçerli bir onay değildir.
+The items below are the jurisdiction-agnostic core. For each target market, also apply the market file (`privacy-eu.md`, `privacy-tr.md`); see "Target markets" in SKILL.md.
 
-### F18 — Gizlilik / KVKK metinleri (BLOCKER)
-- **Geçer:**
-  - Gizlilik politikası var.
-  - KVKK aydınlatma metni var. Metin şunları kapsıyor: veri sorumlusu, amaçlar, aktarılan taraflar (yurt dışı dahil), hukuki sebep, toplama yöntemi ve md. 11 kapsamındaki haklar.
-  - Çerez politikası var.
-  - Açık rıza gereken işlemler (pazarlama, yurt dışı aktarım vb.) için **ayrı ve isteğe bağlı** bir onay kutusu var.
-  - Ticari elektronik ileti için ayrı bir izin alınıyor (İYS).
-  - Kişisel veri toplayan formların yanında aydınlatma metnine link var.
-  - AB kullanıcıları için gizlilik politikası GDPR md. 13 bilgilerini içeriyor: amaç, hukuki dayanak, saklama süresi, haklar, şikâyet hakkı, AB dışına aktarım. AB'de şirket yoksa md. 27 kapsamında AB temsilcisi atanmış.
-  - Yurt dışına aktarım (GA, Stripe, bulut vb.) KVKK'nın 2024 değişikliğinden sonraki rejime göre değerlendirilmiş: uygun güvence (standart sözleşme vb.) var, standart sözleşme Kurul'a bildirilmiş ya da açık rıza alınmış.
-- **Not:** Metnin içeriğinin hukuken yeterli olup olmadığı ❓ olarak işaretlenir, hukuk ekibine sorulur.
+### F17 — Consent before tracking (BLOCKER)
+- **Verify:** where and under what condition do scripts such as GA, GTM, Meta Pixel, Hotjar or Clarity load? Do network requests go out before consent? Check the Network and Cookies tabs in DevTools on first load.
+- **Pass (core):**
+  - On the first visit, only strictly necessary cookies are set, wherever a target market requires prior consent (the EU and Türkiye both do).
+  - The banner offers accept, reject and preferences with equal weight. No pre-ticked boxes.
+  - The choice is stored and can be changed via a "Cookie settings" link in the footer.
+  - Google tags run with Consent Mode v2, defaulting to `denied`.
+- **Pitfall:** "By using this site you accept cookies" is not valid consent.
 
-### F19 — Kullanım koşulları (HIGH)
-- **Geçer:** Kullanım koşulları sayfası var. E-ticaret yapılıyorsa mesafeli satış sözleşmesi, ön bilgilendirme formu, iade ve iptal koşulları da var. Bu sayfalar footer'dan ve ödeme adımından erişilebilir.
+### F18 — Privacy notices (BLOCKER)
+- **Pass (core):**
+  - A privacy policy / notice exists that covers what each target market requires (see the market files).
+  - A cookie policy exists.
+  - Every form that collects personal data links to the notice at the point of collection.
+  - Consents the market requires to be separate (marketing, cross-border transfer, commercial messages) are **separate, optional** checkboxes, never bundled with the terms.
+- **Note:** the legal adequacy of the text is ❓ and goes to the legal team.
 
-### F20 — İletişim (MEDIUM)
-- **Geçer:** Şirket unvanı, adres, e-posta veya telefon ve KVKK başvuru kanalı açıkça yazılı.
+### F19 — Terms and consumer contract information (HIGH)
+- **Pass:** a terms-of-use page exists. For e-commerce, the pre-contract information, withdrawal/return rules and any mandatory contract documents of each target market (see the market files) exist and are reachable from the footer and the checkout step.
+
+### F20 — Contact and data controller (MEDIUM)
+- **Pass:** legal entity name, address, email or phone, and the privacy contact / data-subject request channel are clearly stated, plus any representative a market requires (e.g. an EU representative under GDPR Art. 27).
 
 ## Analytics
 
 ### F21 — Analytics (HIGH)
-- **Geçer:**
-  - Analytics yalnızca onaydan sonra yükleniyor (F17).
-  - URL'lerde ve event parametrelerinde e-posta, telefon veya isim gibi PII yok.
-  - Gerçek ölçüm ID'si kullanılıyor (`G-XXXX` gibi placeholder değil).
-  - Temel conversion event'leri tanımlı (form gönderimi, kayıt, satın alma).
-  - Staging trafiği prod verisine karışmıyor.
+- **Pass:**
+  - Analytics loads only after consent (F17).
+  - No PII such as email, phone or names in URLs or event parameters.
+  - A real measurement ID (not a placeholder like `G-XXXX`).
+  - Core conversion events defined (form submit, sign-up, purchase).
+  - Staging traffic does not mix into production data.
 
-## UX ve performans
+## UX and performance
 
-### F22 — Mobil (HIGH)
-- **Doğrula:** `<meta name="viewport" content="width=device-width, initial-scale=1">` var mı? Kodda `width: 1200` gibi sabit piksel genişlikler var mı? 375px genişlikte yatay scroll oluşuyor mu?
-- **Geçer:** Layout akışkan. Dokunma hedefleri en az 44×44px. Input font-size en az 16px (iOS'un otomatik zoom yapmaması için).
+### F22 — Mobile (HIGH)
+- **Verify:** is `<meta name="viewport" content="width=device-width, initial-scale=1">` present? Are there fixed pixel widths such as `width: 1200`? Is there horizontal scrolling at 375px?
+- **Pass:** fluid layout. Tap targets at least 44×44px. Input font-size at least 16px (so iOS doesn't auto-zoom).
 
-### F23 — Görseller (HIGH)
-- **Geçer:**
-  - Görseller WebP veya AVIF formatında, `srcset`/`sizes` ile duyarlı sunuluyor. Next.js'te `next/image` kullanılıyor.
-  - `width` ve `height` tanımlı (yoksa CLS oluşur).
-  - Ekranın altında kalan görseller lazy yükleniyor. LCP görselinde `fetchpriority="high"` var (Next ≤15'te `priority` de olur) ve bu görsel lazy yüklenmiyor.
-  - Kodda referans verilen tüm dosyalar gerçekten mevcut.
+### F23 — Images (HIGH)
+- **Pass:**
+  - Images in WebP or AVIF, served responsively with `srcset`/`sizes`. `next/image` in Next.js.
+  - `width` and `height` set (otherwise CLS).
+  - Below-the-fold images lazy-loaded. The LCP image has `fetchpriority="high"` (Next ≤15 may use `priority`) and is not lazy-loaded.
+  - Every file referenced in code actually exists.
 
 ### F24 — Core Web Vitals (HIGH)
-- **Doğrula:**
-  - Canlı veya preview URL varsa PageSpeed Insights ya da `npx lighthouse <url> --preset=desktop` ile ölç. Mobil profil de ölçülmeli.
-  - URL yoksa ❓ işaretle. Kodda ağır bundle ve render-blocking script olup olmadığına bak.
-- **Geçer:** Mobil profilde LCP < 2.5 sn, INP < 200 ms, CLS < 0.1.
+- **Verify:**
+  - With a live or preview URL, measure with PageSpeed Insights or `npx lighthouse <url> --preset=desktop`. Measure the mobile profile too.
+  - Without a URL, mark ❓. Look for heavy bundles and render-blocking scripts in code.
+- **Pass:** on the mobile profile LCP < 2.5 s, INP < 200 ms, CLS < 0.1.
 
-### F25 — Erişilebilirlik (HIGH)
-- **Geçer:**
-  - `<img>` etiketlerinde `alt` var. Dekoratif görsellerde `alt=""` kullanılıyor.
-  - Her input bir `<label>` ile ilişkilendirilmiş. Yalnızca placeholder kullanmak yetmez.
-  - Normal metinde kontrast oranı en az 4.5:1.
-  - Tüm işlemler klavye ile yapılabiliyor ve focus görünür.
-  - Semantik başlık sırası korunuyor ve sayfada tek `h1` var.
-- **Doğrula:** Mümkünse `npx @axe-core/cli <url>` çalıştır.
+### F25 — Accessibility (HIGH)
+- **Pass:**
+  - `<img>` tags have `alt`. Decorative images use `alt=""`.
+  - Every input is associated with a `<label>`. A placeholder alone is not enough.
+  - Normal text has a contrast ratio of at least 4.5:1.
+  - Everything is keyboard-operable with visible focus.
+  - Semantic heading order with a single `h1` per page.
+- **Verify:** run `npx @axe-core/cli <url>` when possible.
 
-### F26 — Çapraz tarayıcı (MEDIUM)
-- Bu madde ❓ olarak işaretlenir ve hangi cihaz/tarayıcı kombinasyonlarının test edildiği sorulur.
+### F26 — Cross-browser (MEDIUM)
+- Marked ❓; ask which device/browser combinations were tested.
 
-### F27 — CTA (MEDIUM, koşullu)
-- **Geçer:** Landing sayfalarında ilk ekranda tek ve net bir birincil CTA var. Mobilde sabit CTA kullanılıyorsa içeriği, çerez banner'ını veya `env(safe-area-inset-bottom)` alanını örtmüyor.
-- **Ne zaman ➖:** Uygulama içi ekranlar için bu madde uygulanamaz.
+### F27 — CTA (MEDIUM, conditional)
+- **Pass:** landing pages have one clear primary CTA above the fold. A sticky mobile CTA doesn't cover content, the cookie banner or `env(safe-area-inset-bottom)`.
+- **When ➖:** in-app screens.
 
-### F28 — Teşekkür sayfası (MEDIUM, koşullu)
-- **Geçer:** Form gönderildikten sonra kullanıcı ayrı bir URL'ye yönlendiriliyor ve conversion bu URL'ye bağlı. Sayfa `noindex` ve sitemap'te yok.
+### F28 — Thank-you page (MEDIUM, conditional)
+- **Pass:** after a form is submitted, the user is redirected to a separate URL and conversion is tied to it. The page is `noindex` and not in the sitemap.
 
-## Tedarik zinciri
+## Supply chain
 
-### F29 — Dependency ve framework CVE (HIGH)
-- **Doğrula:**
-  - `npm audit --omit=dev` çalıştır (ağ erişimi varsa).
-  - Framework sürümünü bilinen kritik açıklarla karşılaştır. Örnek: Next.js <14.2.25 ve <15.2.3 sürümleri CVE-2025-29927 middleware bypass açığından etkilenir.
-  - Lockfile var mı?
-  - `.gitignore` dosyası `.env*` kalıbını kapsıyor mu?
-- **Geçer:** Kritik veya yüksek seviyede çözülmemiş CVE yok. Lockfile commit'li. Dependabot veya Renovate açık.
-- **Puanlama:** Lockfile yoksa ❌. Komut çalıştırılamadıysa ve sürümden tahmin ettiysen ⚠️ yaz ve "doğrulanmadı" diye belirt.
+### F29 — Dependency and framework CVEs (HIGH)
+- **Verify:**
+  - Run `npm audit --omit=dev` (if network access exists).
+  - Compare the framework version against known critical vulnerabilities. Example: Next.js before 14.2.25 / 15.2.3 is affected by the CVE-2025-29927 middleware bypass.
+  - Is there a lockfile?
+  - Does `.gitignore` cover `.env*`?
+- **Pass:** no unresolved critical or high CVEs. Lockfile committed. Dependabot or Renovate enabled.
+- **Scoring:** no lockfile → ❌. If the command could not run and you estimated from versions, give ⚠️ and say "not verified".

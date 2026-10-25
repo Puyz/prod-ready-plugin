@@ -1,57 +1,57 @@
-# SPA (React/Vue + Vite, CRA) uygulama notları
+# SPA (React/Vue + Vite, CRA) implementation notes
 
-## F01 Env değişkenleri
-- `VITE_*` önekli değişkenler `import.meta.env` ile okunur. CRA'da `REACT_APP_*` önekli değişkenler bundle'a gömülür. Bu önekli değişkenlerin hepsini public kabul et.
-- Secret gerektiren çağrılar backend veya BFF üzerinden yapılmalı. Bir SPA'da gizli tutulabilecek bir yer yoktur.
-- Build sonrası kontrol: `grep -rE "sk_live|sk-|AKIA" dist`
+## F01 Environment variables
+- `VITE_*` variables are read via `import.meta.env`; in CRA, `REACT_APP_*` variables are embedded in the bundle. Treat all of these prefixed variables as public.
+- Calls that need secrets go through the backend or a BFF. An SPA has no place to keep a secret.
+- Check after building: `grep -rE "sk_live|sk-|AKIA" dist`
 
-## F05 Source map
-- Vite'ta `build.sourcemap` varsayılan olarak `false`'tur.
-- Hata takibi (F16) için source map gerekiyorsa `sourcemap: 'hidden'` ayarını kullan. Üretilen map dosyalarını Sentry'ye yükle, ardından deploy etmeden önce `dist/**/*.map` dosyalarını sil.
+## F05 Source maps
+- Vite's `build.sourcemap` defaults to `false`.
+- If error tracking (F16) needs source maps, use `sourcemap: 'hidden'`. Upload the generated maps to Sentry, then delete `dist/**/*.map` before deploying.
 
-## Header'lar (F04, F05)
-SPA kendi header'ını üretmez, header'lar hosting tarafında tanımlanır:
+## Headers (F04, F05)
+An SPA does not produce its own headers; they are set at the host:
 - **Netlify:** `public/_headers`
-- **Vercel:** `vercel.json` içinde `headers` alanı
+- **Vercel:** the `headers` field in `vercel.json`
 - **nginx:** `add_header ... always;`
 
-Tanımlanması gerekenler: CSP, HSTS, nosniff, `X-Frame-Options`/`frame-ancestors`, Referrer-Policy.
+Set: CSP, HSTS, nosniff, `X-Frame-Options`/`frame-ancestors`, Referrer-Policy.
 
 ## F08 / F11 Meta
 - **React:** `react-helmet-async`
 - **Vue:** `@unhead/vue` (`useHead`)
 
-Bu araçlar title, description ve OG etiketlerini sayfa bazında yönetir.
+These manage title, description and OG tags per page.
 
-Önemli bir uyarı: sosyal medya crawler'ları ve bazı arama motorları JS çalıştırmaz. Landing veya pazarlama sayfaları SEO açısından önemliyse bunları **SSG veya prerender** ile üret (vite-ssg, prerender plugin) ya da o kısmı SSR yapan bir framework'e taşı.
+An important caveat: social-media crawlers and some search engines don't run JS. If landing or marketing pages matter for SEO, generate them with **SSG or prerendering** (vite-ssg, a prerender plugin), or move that part to a framework with SSR.
 
-## F09 / F10 robots ve sitemap
-- `public/robots.txt` dosyası olduğu gibi kopyalanır. Ortama göre farklı içerik gerekiyorsa build script'inde üret, ya da staging'de hosting üzerinden `X-Robots-Tag: noindex` header'ı ekle.
-- Sitemap'i build sırasında route listesinden üret.
+## F09 / F10 robots and sitemap
+- `public/robots.txt` is copied as-is. If content must differ per environment, generate it in the build script, or add an `X-Robots-Tag: noindex` header on staging at the host.
+- Generate the sitemap from the route list at build time.
 
 ## F13 404
-- SPA hosting'leri genelde tüm yolları `index.html`'e yönlendirir ve 200 döner. Bu bir soft 404'tür.
-- Client tarafında bir catch-all route ile 404 bileşeni göster. Bu ⚠️ seviyesinde iyileştirmedir.
-- Gerçek bir 404 status kodu için iki yol var:
-  - Bilinen route'ları prerender edip geri kalanını hosting'in 404 kuralına bırak.
-  - SEO açısından önemli sayfaları SSG ile üret.
-- Error boundary için:
-  - React: `react-error-boundary` kullan.
-  - Vue: `app.config.errorHandler` ayarla ve bir hata sayfası göster.
+- SPA hosts usually rewrite every path to `index.html` with status 200. That is a soft 404.
+- Showing a 404 component via a client-side catch-all route is a ⚠️-level improvement.
+- Two ways to get a real 404 status:
+  - Prerender known routes and leave the rest to the host's 404 rule.
+  - Generate SEO-relevant pages with SSG.
+- Error boundaries:
+  - React: `react-error-boundary`.
+  - Vue: set `app.config.errorHandler` and show an error page.
 
 ## F02 Auth
-- İsteklerde `fetch(url, { credentials: 'include' })` veya axios'ta `withCredentials: true` kullan.
-- Backend tarafında CORS allowlist'i ve CSRF koruması olmalı (B21, B22).
-- Token'ı store'a, localStorage'a veya sessionStorage'a koyma.
+- Use `fetch(url, { credentials: 'include' })` or `withCredentials: true` in axios.
+- The backend must have a CORS allowlist and CSRF protection (B21, B22).
+- Don't put tokens in a store, localStorage or sessionStorage.
 
-## F23 Görseller
-- Görselleri build öncesinde optimize et, örneğin `vite-imagetools` veya sharp script'i ile.
-- `<img>` etiketlerinde şu attribute'lar olsun: `width`, `height`, `loading="lazy"`, `decoding="async"`, `srcset`/`sizes`.
-- LCP görselinde `fetchpriority="high"` kullan ve bu görsele lazy loading verme.
+## F23 Images
+- Optimize images before the build, e.g. with `vite-imagetools` or a sharp script.
+- `<img>` tags should have: `width`, `height`, `loading="lazy"`, `decoding="async"`, `srcset`/`sizes`.
+- Use `fetchpriority="high"` on the LCP image and don't lazy-load it.
 
 ## F17 / F21 Analytics
-- GA veya GTM script'ini `index.html`'e sabit olarak koyma. Onay verildikten sonra script'i dinamik olarak ekle:
+- Don't hard-code the GA or GTM script in `index.html`. Inject it dynamically after consent:
   ```js
   document.head.appendChild(Object.assign(document.createElement('script'), { src, async: true }))
   ```
-- Consent Mode v2'nin `default: denied` ayarı her durumda en başta çalışmalı.
+- The Consent Mode v2 `default: denied` call must always run first.

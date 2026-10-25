@@ -1,19 +1,19 @@
-# Next.js (App Router) uygulama notları
+# Next.js (App Router) implementation notes
 
-Bu dosyada sürüme bağlı ayrıntılar var. Örneğin Next 16'da `middleware.ts` dosyasının adı `proxy.ts` oldu. Projede kullanılan sürümü `package.json` dosyasından kontrol et.
+Some details here are version-specific. For example, Next 16 renamed `middleware.ts` to `proxy.ts`. Check the version in `package.json`.
 
-## F01 Secret
-- `NEXT_PUBLIC_*` önekli her değişken build sırasında bundle'a gömülür. Secret kullanan kod yalnızca sunucuda çalışmalı: route handler, server action ya da `import 'server-only'` ile işaretlenmiş bir modül.
-- Build çıktısında secret aramak için:
+## F01 Secrets
+- Every `NEXT_PUBLIC_*` variable is embedded in the bundle at build time. Code that uses secrets runs only on the server: a route handler, a server action, or a module marked with `import 'server-only'`.
+- To search the build output for secrets:
   ```
   grep -rE "sk_live|sk-|AKIA" .next/static
   ```
 
-## F05 Build hijyeni
+## F05 Build hygiene
 ```js
 // next.config.js
 module.exports = {
-  productionBrowserSourceMaps: false,   // varsayılan değer; true yapma
+  productionBrowserSourceMaps: false,   // the default; don't set it to true
   poweredByHeader: false,
   compiler: { removeConsole: { exclude: ['error'] } },
   async headers() {
@@ -27,65 +27,65 @@ module.exports = {
   },
 };
 ```
-CSP (F04) için nonce tabanlı desen kullan. Next ≤15'te `middleware.ts`, Next 16+'da `proxy.ts` dosyasında (`export function proxy`, yalnızca nodejs runtime) her istek için bir nonce üret. Bu nonce'u `Content-Security-Policy: script-src 'nonce-…' 'strict-dynamic'` header'ına ve `x-nonce` request header'ına yaz. Next kendi script'lerine nonce'u otomatik ekler. Kurulum için resmi "Content Security Policy" rehberini izle.
+For CSP (F04), use the nonce pattern. Generate a nonce per request in `middleware.ts` (Next ≤15) or `proxy.ts` (Next 16+, `export function proxy`, nodejs runtime only). Write it into the `Content-Security-Policy: script-src 'nonce-…' 'strict-dynamic'` header and the `x-nonce` request header. Next adds the nonce to its own scripts automatically. Follow the official "Content Security Policy" guide for the setup.
 
-## F08 / F11 / F12 Metadata, OG ve ikonlar
+## F08 / F11 / F12 Metadata, OG and icons
 ```tsx
 // app/layout.tsx
 export const metadata: Metadata = {
-  metadataBase: new URL('https://acme.com.tr'),
-  title: { default: 'Acme — <değer önerisi>', template: '%s | Acme' },
-  description: '150–160 karakterlik açıklama',
-  alternates: { canonical: '/' },
+  metadataBase: new URL('https://acme.com'),
+  title: { default: 'Acme — <value proposition>', template: '%s | Acme' },
+  description: 'A 150–160 character description',
+  alternates: { canonical: '/', languages: { en: '/en', tr: '/tr' } },   // languages only if multilingual
   openGraph: { type: 'website', siteName: 'Acme', images: ['/og.png'] },   // 1200×630
   twitter: { card: 'summary_large_image' },
 };
 export default function RootLayout({ children }) {
-  return <html lang="tr"><body>{children}</body></html>;
+  return <html lang="en"><body>{children}</body></html>;
 }
 ```
-- Dinamik sayfalarda `export async function generateMetadata({ params })` ile içerikten title ve description üret.
-- Dosya bazlı metadata kullanılabilir. Next şu dosyaları otomatik bağlar:
+- On dynamic pages, generate title and description from content with `export async function generateMetadata({ params })`.
+- File-based metadata works too. Next wires these files up automatically:
   - `app/favicon.ico`
   - `app/icon.png`
   - `app/apple-icon.png`
   - `app/manifest.ts`
   - `app/opengraph-image.png`
 
-## F09 / F10 robots ve sitemap (ortama göre)
+## F09 / F10 robots and sitemap (per environment)
 ```ts
 // app/robots.ts
 export default function robots(): MetadataRoute.Robots {
-  const isProd = process.env.VERCEL_ENV === 'production';   // kendi ortam değişkenini kullan
+  const isProd = process.env.VERCEL_ENV === 'production';   // use your own environment variable
   return isProd
-    ? { rules: { userAgent: '*', allow: '/' }, sitemap: 'https://acme.com.tr/sitemap.xml' }
+    ? { rules: { userAgent: '*', allow: '/' }, sitemap: 'https://acme.com/sitemap.xml' }
     : { rules: { userAgent: '*', disallow: '/' } };
 }
 // app/sitemap.ts
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  return [{ url: 'https://acme.com.tr/', lastModified: new Date() } /* , ...public sayfalar */];
+  return [{ url: 'https://acme.com/', lastModified: new Date() } /* , ...public pages */];
 }
 ```
-- Bu dosyaları kullanıyorsan `public/robots.txt` dosyasını sil, ikisi çakışır.
-- Admin yollarını robots'a yazma.
+- If you use these files, delete `public/robots.txt`; the two conflict.
+- Never list admin paths in robots.
 
 ## F13 404 / 500
-- `app/not-found.tsx` ekle. Kaynak bulunamadığında server component içinden `notFound()` çağır (`next/navigation`). Bu çağrı 404 status kodu döndürür.
-- `app/error.tsx` (`'use client'`) segment seviyesindeki hataları yakalar. Root layout'taki hataları yakalamak için ayrıca `app/global-error.tsx` ekle.
-- Fetch yaparken `if (!res.ok) notFound()` kontrolünü unutma.
+- Add `app/not-found.tsx`. When a resource is missing, call `notFound()` (`next/navigation`) from a server component. It returns status 404.
+- `app/error.tsx` (`'use client'`) catches segment-level errors. Add `app/global-error.tsx` too, to catch errors in the root layout.
+- Don't forget `if (!res.ok) notFound()` after a fetch.
 
 ## F03 XSS
 ```tsx
 import DOMPurify from 'isomorphic-dompurify';
 <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(post.body) }} />
 const safeHref = (u: string) => { try { return ['http:', 'https:'].includes(new URL(u).protocol) ? u : undefined; } catch { return undefined; } };
-<a href={safeHref(post.authorWebsite)} target="_blank" rel="noopener noreferrer">Yazar</a>
+<a href={safeHref(post.authorWebsite)} target="_blank" rel="noopener noreferrer">Author</a>
 ```
 
-## F17 / F21 Onaya bağlı analytics
+## F17 / F21 Consent-gated analytics
 ```tsx
 'use client';
-// Consent state'i CMP'den veya kendi banner'ından gelir
+// consent state comes from your CMP or your own banner
 export function Analytics({ consent }: { consent: boolean }) {
   return (
     <>
@@ -98,13 +98,13 @@ export function Analytics({ consent }: { consent: boolean }) {
   );
 }
 ```
-- Onay verildiğinde şu çağrıyı yap: `gtag('consent','update',{analytics_storage:'granted', ...})`
-- `@next/third-parties` içindeki `GoogleAnalytics` bileşeni de aynı şekilde yalnızca onaydan sonra render edilmeli.
+- When consent is given, call `gtag('consent','update',{analytics_storage:'granted', ...})`.
+- The `GoogleAnalytics` component from `@next/third-parties` must likewise render only after consent.
 
-## F23 Görseller
-- `next/image` kullan. Bileşen WebP/AVIF ve `srcset` üretir. `width` ve `height` ver ya da `fill` + `sizes` kullan.
-- LCP görselinde Next ≤15 için `priority` kullan. Next 16+'da `priority` deprecated oldu; docs çoğu durumda `fetchPriority="high"` veya `loading="eager"` kullanmayı öneriyor (`preload` prop'u da var).
+## F23 Images
+- Use `next/image`. It produces WebP/AVIF and `srcset`. Pass `width` and `height`, or use `fill` + `sizes`.
+- For the LCP image, use `priority` on Next ≤15. On Next 16+, `priority` is deprecated; the docs recommend `fetchPriority="high"` or `loading="eager"` in most cases (a `preload` prop also exists).
 
-## F14 / F15 Formlar
-- Server action kullanıyorsan `useActionState` ile hataları alan bazında döndür. Gönderim sırasında butonu `useFormStatus().pending` ile disable et.
-- Sunucu tarafında zod ile doğrula. Client tarafındaki doğrulama yalnızca UX içindir.
+## F14 / F15 Forms
+- With server actions, return per-field errors via `useActionState`. Disable the button while submitting with `useFormStatus().pending`.
+- Validate on the server with zod. Client-side validation is UX only.

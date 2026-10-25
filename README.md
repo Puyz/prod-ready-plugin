@@ -1,10 +1,10 @@
 # prod-ready marketplace
 
-Claude Code marketplace'i. Tek plugin içerir: [`prod-ready`](plugins/prod-ready/README.md) — backend ve web frontend için production readiness kontrol listeleri (build + audit modları, GO / NO-GO raporu).
+A Claude Code marketplace with one plugin: [`prod-ready`](plugins/prod-ready/README.md), production readiness checklists for backends and web frontends (build and audit modes, GO / NO-GO reports, EU and Türkiye privacy modules).
 
 ```bash
-claude plugin marketplace add <bu-reponun-git-url'si-veya-yerel-yolu>
+claude plugin marketplace add Puyz/prod-ready-plugin
 claude plugin install prod-ready@prod-ready-marketplace
 ```
 
-Lisans: [MIT](LICENSE)
+License: [MIT](LICENSE)

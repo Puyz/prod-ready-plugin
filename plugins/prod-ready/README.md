@@ -1,50 +1,54 @@
 # prod-ready
 
-Production'a çıkmadan önce backend ve web frontend için kontrol listeleri. Kod yazarken kuralları uygular, istendiğinde projeyi denetleyip kanıta dayalı bir **GO / NO-GO** raporu üretir.
+Production readiness checklists for backends and web frontends, for Claude Code. The skills apply the rules while you write code, and on request audit a project and produce an evidence-based **GO / NO-GO** report.
 
-*Production readiness checklists for backend and web frontend. Applies the rules while you code and produces an evidence-based GO / NO-GO audit report on request.*
+## What's inside
 
-## İçerik
-
-| Skill | Kapsam |
+| Skill | Scope |
 |---|---|
-| `prod-ready-backend` | 39 madde, 12 alanda: kimlik doğrulama, yetkilendirme/IDOR, injection ve SSRF, CSRF/CORS/HTTPS/header'lar, rate limit, dosya yükleme, secret yönetimi, hata ve audit log, veritabanı/BaaS, backup, tedarik zinciri/CI, operasyon/KVKK. Stack notları: ASP.NET Core, Node.js (Express/NestJS/Next route handlers). |
-| `prod-ready-frontend` | 29 madde: güvenlik (bundle secret, XSS, CSP), SEO (meta, robots, sitemap, OG), 404/500 ve loading/form hataları, KVKK/GDPR (çerez onayı, aydınlatma metni), analytics, mobil, görseller, Core Web Vitals, erişilebilirlik, bağımlılık CVE'leri. Stack notları: Next.js App Router, React/Vue SPA. |
+| `prod-ready-backend` | 39 items in 12 areas: authentication, authorization/IDOR, injection and SSRF, CSRF/CORS/HTTPS/headers, rate limiting, file upload, secret management, errors and audit logging, database/BaaS, backups, supply chain/CI, operations and privacy. Stack notes: ASP.NET Core (a reference `Program.cs` that compiles on .NET 8 and 10) and Node.js (Express/NestJS/Next route handlers). |
+| `prod-ready-frontend` | 29 items: security (bundle secrets, XSS, CSP), SEO (meta, robots, sitemap, OG), 404/500 and loading/form error states, privacy law (consent, notices, consumer contract info), analytics, mobile, images, Core Web Vitals, accessibility, dependency CVEs. Stack notes: Next.js App Router, React/Vue SPA. Privacy modules: EU/EEA (GDPR, ePrivacy, consumer rules, EAA) and Türkiye (KVKK, İYS, distance sales). |
 
-Her maddenin bir ID'si (B01–B39, F01–F29) ve önem derecesi (BLOCKER / HIGH / MEDIUM) vardır.
+Every item has an ID (B01–B39, F01–F29) and a severity (BLOCKER / HIGH / MEDIUM).
 
-## Kullanım
+## Usage
 
-Skill'ler otomatik tetiklenir; ayrıca adıyla da çağırabilirsin.
+The skills trigger automatically; you can also invoke them by name.
 
-- **Build modu** — auth, endpoint, form, upload, sayfa yazarken ilgili maddeler varsayılan davranış olur.
-  > "Express için login endpoint'i yaz"
-- **Audit modu** — her madde ✅ / ❌ / ⚠️ / ➖ / ❓ ile, `dosya:satır` kanıtıyla puanlanır. Koddan doğrulanamayanlar (backup restore testi, altyapı MFA'sı, DB ağ erişimi, Lighthouse) "manuel doğrula" sorusu olarak ayrılır. Herhangi bir BLOCKER kalırsa karar NO-GO'dur.
-  > "Bu proje prod'a hazır mı?" · "Frontend'i yayın öncesi denetle"
+- **Build mode:** when you write auth, endpoints, forms, uploads or pages, the relevant items become the default behavior.
+  > "Write a login endpoint for Express"
+- **Audit mode:** every item is scored ✅ / ❌ / ⚠️ / ➖ / ❓ with `file:line` evidence. Items that cannot be verified from code (backup restore tests, infrastructure MFA, DB network access, Lighthouse) are listed as "verify manually" questions. Any open BLOCKER means NO-GO.
+  > "Is this project production ready?" · "Audit the frontend before launch"
 
-Rapor, kullanıcının yazdığı dilde üretilir.
+Reports are written in the language you write in. Privacy items are checked against the rules of your target markets; markets without a module get the core rules plus a "legal review required" flag.
 
-## Kurulum
+## Installation
 
 ```bash
-claude plugin marketplace add <bu-reponun-git-url'si-veya-yerel-yolu>
+claude plugin marketplace add Puyz/prod-ready-plugin
 claude plugin install prod-ready@prod-ready-marketplace
 ```
 
-Kurulumdan sonra yeni bir oturum aç. Daha önce aynı skill'leri `~/.claude/skills/` altına elle kopyaladıysan çift görünmemesi için onları kaldır.
+Start a new session after installing. If you previously copied the same skills into `~/.claude/skills/`, remove those copies so they don't appear twice.
 
-## Sınırlar
+## Limits
 
-- Bu bir kontrol listesidir; sızma testi, SAST/DAST aracı veya hukuki görüş yerine geçmez.
-- KVKK/GDPR metinlerinin hukuki yeterliliği her zaman "manuel doğrula" olarak hukuk ekibine bırakılır.
-- Kod örnekleri desen gösterir; projenin sürümüne göre doğrulanmalıdır.
+- This is a checklist. It does not replace a penetration test, SAST/DAST tooling or legal advice.
+- The legal adequacy of privacy texts is always left to your legal team as a "verify manually" item.
+- Code samples show patterns; verify them against the versions your project uses.
 
-## Geliştirme
+## Development
 
-`evals/` altındaki vaka, kasıtlı açıklar içeren örnek bir uygulamada audit modunu test eder:
+The cases under `evals/` run audit mode against an intentionally vulnerable sample app, in English and Turkish:
 
 ```bash
-claude plugin eval plugins/prod-ready
+claude plugin eval plugins/prod-ready --scaffold
 ```
 
-Değişiklikler için [CHANGELOG.md](CHANGELOG.md).
+See [CHANGELOG.md](CHANGELOG.md) for changes.
+
+---
+
+## Türkçe
+
+Backend ve web frontend için production'a çıkış kontrol listeleri. Kod yazarken kuralları uygular; istendiğinde projeyi denetleyip kanıta dayalı bir **GO / NO-GO** raporu üretir. Skill'ler Türkçe sorulara da tetiklenir ve rapor Türkçe yazılır. Gizlilik maddeleri hedef pazara göre kontrol edilir; Türkiye için KVKK, İYS ve mesafeli satış kuralları ayrı bir modülde yer alır. Kurulum için yukarıdaki iki komutu kullan.

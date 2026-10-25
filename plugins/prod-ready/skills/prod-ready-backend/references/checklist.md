@@ -1,303 +1,303 @@
-# Backend checklist — detaylar
+# Backend checklist — details
 
-Her madde şu yapıdadır:
-- **Neden:** maddenin gerekçesi
-- **Doğrula:** neye bakılacağı ve hangi desenlerin aranacağı
-- **Geçer:** kabul kriteri
-- **Tuzak:** sık yapılan hata
+Each item has this structure:
+- **Why:** the rationale
+- **Verify:** what to look at and which patterns to search for
+- **Pass:** acceptance criteria
+- **Pitfall:** a common mistake
 
-Grep desenleri yalnızca başlangıç noktasıdır. Eşleşen her yeri oku; eşleşmenin olmaması da kanıt sayılmaz.
+Grep patterns are only a starting point. Read every match; the absence of a match is not evidence.
 
 ---
 
-## A. Kimlik doğrulama
+## A. Authentication
 
-### B01 — Parola hash (BLOCKER)
-- **Neden:** DB sızarsa hızlı hash'ler (MD5, SHA*) dakikalar içinde kırılır.
-- **Doğrula:**
-  - `md5|sha1|sha256|createHash|SHA256.Create|HashPassword|bcrypt|argon2|scrypt|pbkdf2` desenlerini ara.
-  - Parola alanının nasıl yazıldığını takip et.
-- **Geçer:** Argon2id (m≥19MiB, t≥2) veya bcrypt (cost≥10) kullanılıyor. Her parola için ayrı salt var (kütüphane bunu otomatik yapar). Eski hash'ler login sırasında rehash ediliyor.
-- **Tuzak:** "SHA256 + salt" da yetersizdir. Hash'leme işini kendin yazma, kütüphaneye bırak.
+### B01 — Password hashing (BLOCKER)
+- **Why:** if the DB leaks, fast hashes (MD5, SHA*) are cracked within minutes.
+- **Verify:**
+  - Search for `md5|sha1|sha256|createHash|SHA256.Create|HashPassword|bcrypt|argon2|scrypt|pbkdf2`.
+  - Follow how the password field gets written.
+- **Pass:** Argon2id (m≥19MiB, t≥2) or bcrypt (cost≥10), or PBKDF2 at OWASP iteration counts. A unique salt per password (libraries do this automatically). Old hashes are rehashed on login.
+- **Pitfall:** "SHA256 + salt" is not enough either. Never write the hashing yourself; use a library.
 
-### B02 — Token saklama (BLOCKER)
-- **Neden:** localStorage'daki token'ı her XSS okuyabilir. httpOnly cookie ise JS'ten okunamaz.
-- **Doğrula:**
-  - Login yanıtını bul: `res.json({ token` ya da `return Ok(new { token` gibi bir yapı var mı?
-  - `Set-Cookie`/`res.cookie`/`AppendCookie` için `httpOnly`, `secure` ve `sameSite` değerlerine bak.
-  - Frontend'de `localStorage.setItem` var mı?
-- **Geçer:** Session ya da token, `HttpOnly; Secure; SameSite=Lax|Strict` bayraklı bir cookie ile taşınıyor. Refresh cookie'si `__Secure-` önekiyle ve `Path=/auth` ile sınırlı. `__Host-` öneki Path=/ gerektirir. Path'i `/auth/refresh` yapmak logout'un cookie'yi almasını engeller. SPA için BFF var: token sunucuda kalıyor, tarayıcıda yalnızca session cookie bulunuyor.
-- **Tuzak:** Mobil uygulama veya 3. parti API istemcisi için Bearer token kabul edilebilir. Bu durumda madde web istemcisi için değerlendirilir.
+### B02 — Token storage (BLOCKER)
+- **Why:** any XSS can read a token in localStorage. An httpOnly cookie cannot be read from JS.
+- **Verify:**
+  - Find the login response: is there something like `res.json({ token` or `return Ok(new { token`?
+  - Check `httpOnly`, `secure` and `sameSite` on `Set-Cookie`/`res.cookie`/`AppendCookie`.
+  - Does the frontend call `localStorage.setItem`?
+- **Pass:** the session or token travels in a cookie flagged `HttpOnly; Secure; SameSite=Lax|Strict`. The refresh cookie uses the `__Secure-` prefix and is scoped to `Path=/auth`. (`__Host-` requires Path=/. Scoping to `/auth/refresh` would stop logout from receiving the cookie.) SPAs use a BFF: the token stays on the server and the browser only holds a session cookie.
+- **Pitfall:** Bearer tokens are acceptable for mobile apps or third-party API clients. In that case score the item for the web client.
 
-### B03 — Token ömrü ve refresh rotation (BLOCKER)
-- **Neden:** Çalınan bir token kısa sürede işe yaramaz hale gelmeli. Çalınan bir refresh token ise ilk tekrar kullanımda yakalanmalı.
-- **Doğrula:**
-  - `expiresIn|exp|ExpireTimeSpan|AccessTokenLifetime` değerlerine bak.
-  - Refresh endpoint'i eski token'ı geçersiz kılıp yenisini veriyor mu?
-  - Aynı refresh token ikinci kez kullanılınca token ailesinin tamamı iptal ediliyor mu?
-- **Geçer:** Access token 5–15 dk ömürlü. Refresh token tek kullanımlık, rotate ediliyor ve DB'de hash'li duruyor. Mutlak ömür sınırı var (ör. 30 gün), rotation bu süreyi uzatmıyor. Rotation tek transaction içinde yapılıyor ve cookie commit'ten sonra set ediliyor.
-- **Tuzak:** Expiry tanımlanmamış bir JWT sonsuza kadar geçerlidir.
+### B03 — Token lifetime and refresh rotation (BLOCKER)
+- **Why:** a stolen token should become useless quickly, and a stolen refresh token should be caught on its first reuse.
+- **Verify:**
+  - Check the values of `expiresIn|exp|ExpireTimeSpan|AccessTokenLifetime`.
+  - Does the refresh endpoint invalidate the old token and issue a new one?
+  - When the same refresh token is used twice, is the whole token family revoked?
+- **Pass:** access token lives 5–15 min. Refresh tokens are single-use, rotated and stored hashed. There is an absolute lifetime (e.g. 30 days) that rotation does not extend. Rotation runs in one transaction and the cookie is set only after commit.
+- **Pitfall:** a JWT without an expiry is valid forever.
 
-### B04 — Sunucu tarafı iptal (BLOCKER)
-- **Doğrula:**
-  - Logout yalnızca cookie'yi mi siliyor, yoksa session veya refresh kaydını da siliyor mu?
-  - Parola değişimi ve sıfırlamadan sonra diğer oturumlar düşüyor mu?
-- **Geçer:** Logout, parola değişimi ve "tüm cihazlardan çık" sunucu tarafında kayıt siliyor. Access token için kısa ömür veya denylist kullanılıyor.
+### B04 — Server-side revocation (BLOCKER)
+- **Verify:**
+  - Does logout only clear the cookie, or does it also delete the session/refresh record?
+  - Are other sessions dropped after a password change or reset?
+- **Pass:** logout, password change and "sign out everywhere" delete server-side records. Access tokens rely on a short lifetime or a denylist.
 
-### B05 — JWT doğrulama (BLOCKER)
-- **Doğrula:**
-  - `jwt.verify(token, secret)` çağrısında `algorithms` opsiyonu verilmiş mi?
-  - `ValidateIssuer/Audience/Lifetime/IssuerSigningKey` değerleri true mu?
-  - Secret değeri ne? `secret`, `changeme` veya 32 byte'tan kısa bir değer ❌ demektir.
-- **Geçer:** Algoritma sabitlenmiş. iss, aud ve exp doğrulanıyor. Secret ≥256 bit rastgele, ya da RS256/EdDSA anahtar çifti kullanılıyor.
-- **Tuzak:** `jwt.decode` yalnızca token'ı çözer, imzayı doğrulamaz.
+### B05 — JWT validation (BLOCKER)
+- **Verify:**
+  - Is the `algorithms` option passed to `jwt.verify(token, secret)`?
+  - Are `ValidateIssuer/Audience/Lifetime/IssuerSigningKey` true?
+  - What is the secret? `secret`, `changeme` or anything shorter than 32 bytes means ❌.
+- **Pass:** algorithm pinned; iss, aud and exp validated; a random secret ≥256 bits, or an RS256/EdDSA key pair.
+- **Pitfall:** `jwt.decode` only decodes the token; it does not verify the signature.
 
-### B06 — Brute force koruması (BLOCKER)
-- **Doğrula:**
-  - Login, register, forgot-password, OTP ve verify endpoint'lerinde rate limiter var mı?
-  - Limit yalnızca IP'ye göre değil, hesap (e-posta) bazında da uygulanıyor mu?
-- **Geçer:** IP başına limit (ör. 10/dk) ve hesap başına limit (ör. 5 başarısız denemede artan gecikme veya 15 dk kilit) var.
-- **Tuzak:** Kalıcı hesap kilidi, saldırgana DoS imkânı verir. Kilit süreli olmalı.
+### B06 — Brute-force protection (BLOCKER)
+- **Verify:**
+  - Are there rate limiters on login, register, forgot-password, OTP and verify endpoints?
+  - Is the limit applied per account (email), not only per IP?
+- **Pass:** a per-IP limit (e.g. 10/min) and a per-account limit (e.g. after 5 failures, increasing delay or a 15-minute lock).
+- **Pitfall:** a permanent account lock hands attackers a DoS. Locks must expire.
 
-### B07 — Kullanıcı enumeration (HIGH)
-- **Doğrula:**
-  - Login, register ve forgot-password yanıtlarını karşılaştır: farklı mesaj ve status dönüyor mu?
-  - Kullanıcı bulunamayınca hash hesaplanmadan erken mi dönülüyor (timing farkı)?
-- **Geçer:**
-  - Yanıt her durumda tek ve aynı: "E-posta veya parola hatalı".
-  - Forgot-password her durumda "Kayıtlıysa e-posta gönderildi" diyor.
-  - Kullanıcı yoksa da sahte bir hash hesaplanıyor (timing farkı kapatılmış).
+### B07 — User enumeration (HIGH)
+- **Verify:**
+  - Compare login, register and forgot-password responses: do messages or status codes differ?
+  - Does the code return early without hashing when the user is not found (timing difference)?
+- **Pass:**
+  - One identical response in every case: "Invalid email or password".
+  - Forgot-password always says "If the account exists, an email has been sent".
+  - A dummy hash is computed when the user does not exist (timing difference closed).
 
-### B08 — Şifre sıfırlama (HIGH)
-- **Geçer:** Token en az 128 bit rastgele, DB'de hash'li, tek kullanımlık ve en fazla 30–60 dk geçerli. Kullanıldığında diğer oturumlar iptal ediliyor. Token URL'deyse sayfada `Referrer-Policy: no-referrer` var.
+### B08 — Password reset (HIGH)
+- **Pass:** token is ≥128 random bits, stored hashed, single-use and valid for 30–60 minutes at most. Using it revokes other sessions. If the token is in the URL, the page sends `Referrer-Policy: no-referrer`.
 
 ### B09 — MFA (HIGH)
-- **Doğrula:** Admin ve yetkili rollerde TOTP veya WebAuthn zorunlu mu? Yönetim için IdP kullanılıyorsa MFA politikası orada açık mı? Koddan görünmüyorsa ❓.
+- **Verify:** is TOTP or WebAuthn required for admin and privileged roles? If an IdP handles admin login, is MFA enforced there? If not visible in code, ❓.
 
-## B. Yetkilendirme
+## B. Authorization
 
-### B10 — Varsayılan deny (BLOCKER)
-- **Doğrula:**
-  - Route listesini çıkar.
-  - Auth middleware global mi, yoksa route bazında mı eklenmiş?
-  - `[AllowAnonymous]`/public route'ları tek tek gözden geçir.
-- **Geçer:** Auth global uygulanıyor ve public route'lar açıkça işaretli. Ya da her route'ta auth var ve eksik olan yok.
+### B10 — Deny by default (BLOCKER)
+- **Verify:**
+  - List all routes.
+  - Is auth middleware global or added per route?
+  - Review every `[AllowAnonymous]`/public route.
+- **Pass:** auth is applied globally and public routes are explicitly marked, or every route has auth and none is missing.
 
-### B11 — IDOR / sahiplik (BLOCKER)
-- **Neden:** "Her istekte, istek o kişiye mi ait?" sorusu. En sık rastlanan ve en çok zarar veren açık budur.
-- **Doğrula:**
-  - `:id`, `{id}` veya `?id=` alan her endpoint'i bul.
-  - Sorguda `user_id = currentUser` veya `tenant_id` filtresi var mı?
-  - "Önce kaydı getir, sonra sahibini kontrol et" deseni varsa kontrolün gerçekten yapıldığını doğrula.
-- **Geçer:** Sahiplik filtresi sorgunun içinde ve her endpoint'te var. Başkasının kaynağı istendiğinde 404 dönüyor.
-- **Tuzak:** List endpoint'i filtreli olup detail endpoint'i filtresiz kalabiliyor. Ayrıca update, delete ve export endpoint'leri de ayrı ayrı kontrol edilmeli.
+### B11 — IDOR / ownership (BLOCKER)
+- **Why:** "does this request belong to this person?" This is the most common and most damaging gap.
+- **Verify:**
+  - Find every endpoint taking `:id`, `{id}` or `?id=`.
+  - Does the query filter by `user_id = currentUser` or `tenant_id`?
+  - If the code fetches the record first and checks the owner afterwards, confirm the check really happens.
+- **Pass:** the ownership filter is inside the query on every endpoint. Requests for someone else's resource return 404.
+- **Pitfall:** the list endpoint is filtered but the detail endpoint is not. Check update, delete and export endpoints separately too.
 
-### B12 — Kimlik ve rolün kaynağı (BLOCKER)
-- **Doğrula:** `req.headers['x-role'|'x-user-id']`, `body.userId`, `body.role`, `query.isAdmin` gibi kullanımları ara.
-- **Geçer:** Kimlik ve rol yalnızca doğrulanmış session'dan veya token claim'inden alınıyor. Rol değişikliği anında etkili oluyor: kritik işlemlerde rol DB'den okunuyor.
+### B12 — Source of identity and role (BLOCKER)
+- **Verify:** search for things like `req.headers['x-role'|'x-user-id']`, `body.userId`, `body.role`, `query.isAdmin`.
+- **Pass:** identity and role come only from the verified session or token claims. Role changes take effect immediately: critical actions read the role from the DB.
 
 ### B13 — Mass assignment (HIGH)
-- **Doğrula:** `Object.assign(entity, req.body)`, `...req.body`, `update(req.body)`, body'den gelen key'lerle SQL kolon adı üretme, entity'yi doğrudan model binding'e verme gibi kullanımları ara.
-- **Geçer:** Her endpoint'in kendine ait bir DTO'su veya allowlist'i var. Hassas alanlar yalnızca ayrı ve yetkili endpoint'lerden değiştirilebiliyor.
+- **Verify:** search for `Object.assign(entity, req.body)`, `...req.body`, `update(req.body)`, SQL column names built from body keys, or entities bound directly by model binding.
+- **Pass:** every endpoint has its own DTO or allowlist. Sensitive fields can only be changed through separate, authorized endpoints.
 
-### B14 — Admin paneli (HIGH)
-- **Geçer:**
-  - Admin rolü var ve sunucu tarafında kontrol ediliyor.
-  - MFA zorunlu (B09).
-  - Admin işlemleri audit log'a yazılıyor (B31).
-  - Ek katman olarak IP allowlist, VPN veya Zero Trust (Cloudflare Access vb.) var.
-  - Admin paneli ayrı bir subdomain'de ve `robots.txt`'ye yazılmamış.
+### B14 — Admin panel (HIGH)
+- **Pass:**
+  - An admin role exists and is checked server-side.
+  - MFA required (B09).
+  - Admin actions are written to the audit log (B31).
+  - IP allowlist, VPN or Zero Trust (Cloudflare Access etc.) as an extra layer.
+  - The admin panel is on its own subdomain and not listed in `robots.txt`.
 
-## C. Girdi ve injection
+## C. Input and injection
 
-### B15 — Sunucu tarafı validation (BLOCKER)
-- **Doğrula:** Body, query ve params için schema kütüphanesi kullanılıyor mu (zod/joi/class-validator/FluentValidation/DataAnnotations)? Hangi endpoint'ler validator'sız?
-- **Geçer:** Her endpoint'te tip, uzunluk ve format kontrolü var, enum'lar allowlist'ten geçiyor. Bilinmeyen alanlar reddediliyor veya yok sayılıyor. Parola dahil her string alanın bir üst uzunluk sınırı var; sınırsız parola argon2 üzerinden CPU DoS'a açıktır.
+### B15 — Server-side validation (BLOCKER)
+- **Verify:** is a schema library used for body, query and params (zod/joi/class-validator/FluentValidation/DataAnnotations)? Which endpoints have no validator?
+- **Pass:** every endpoint checks type, length and format; enums pass an allowlist; unknown fields are rejected or ignored. Every string field, passwords included, has a maximum length; an unbounded password exposes argon2 to CPU DoS.
 
 ### B16 — SQL injection (BLOCKER)
-- **Doğrula:** `query(` / `execute(` / `FromSqlRaw` / `ExecuteSqlRaw` / `$queryRawUnsafe` / `.raw(` çağrılarında `+`, template string `${` veya `string.Format` kullanılmış mı? Dinamik ORDER BY, kolon veya tablo adları nereden geliyor?
-- **Geçer:** Tüm değerler parametre olarak geçiyor. Tanımlayıcılar (kolon, tablo, sıralama) sabit bir allowlist'ten seçiliyor.
-- **Tuzak:** `FromSqlInterpolated` güvenlidir, `FromSqlRaw($"...")` güvensizdir.
+- **Verify:** do `query(` / `execute(` / `FromSqlRaw` / `ExecuteSqlRaw` / `$queryRawUnsafe` / `.raw(` calls use `+`, template strings `${` or `string.Format`? Where do dynamic ORDER BY, column or table names come from?
+- **Pass:** all values are passed as parameters. Identifiers (columns, tables, sort keys) are picked from a fixed allowlist.
+- **Pitfall:** `FromSql`/`FromSqlInterpolated` are safe; `FromSqlRaw($"...")` is not.
 
-### B17 — Diğer injection'lar (HIGH)
-- **Doğrula:** `exec|spawn|child_process|Process.Start|eval|new Function`, path birleştirme (`path.join(base, userInput)`), Mongo sorgusuna doğrudan body verilmesi (`{$ne:..}`), kullanıcı girdisinden template derlenmesi gibi kullanımları ara.
-- **Geçer:** Shell çağrısı yok, ya da argümanlar dizi olarak veriliyor ve allowlist'ten geçiyor. Path normalize ediliyor ve base dizinin içinde kaldığı kontrol ediliyor.
+### B17 — Other injection (HIGH)
+- **Verify:** search for `exec|spawn|child_process|Process.Start|eval|new Function`, path joins (`path.join(base, userInput)`), request bodies passed straight into Mongo queries (`{$ne:..}`), templates compiled from user input.
+- **Pass:** no shell calls, or arguments passed as an array and allowlisted. Paths are normalized and checked to stay inside the base directory.
 
 ### B18 — SSRF (HIGH)
-- **Doğrula:** `fetch|axios|HttpClient|request|got` çağrılarında URL kullanıcıdan mı geliyor (webhook, preview, import, avatar URL)?
-- **Geçer:**
-  - Host allowlist var ya da çözümlenen IP private, loopback ve link-local aralıkta mı diye kontrol ediliyor (169.254.169.254 dahil).
-  - Redirect'ler kapalı veya her redirect yeniden doğrulanıyor.
-  - Endpoint auth arkasında.
-  - Yanıt doğrudan kullanıcıya yansıtılmıyor.
+- **Verify:** do `fetch|axios|HttpClient|request|got` calls use a URL that comes from the user (webhooks, previews, imports, avatar URLs)?
+- **Pass:**
+  - A host allowlist, or the resolved IP is checked against private, loopback and link-local ranges (169.254.169.254 included).
+  - Redirects disabled, or every redirect re-validated.
+  - The endpoint is behind auth.
+  - The response is not reflected to the user as-is.
 
 ### B19 — Deserialization (HIGH)
-- **Doğrula:** `TypeNameHandling` (≠ None), `BinaryFormatter`, `pickle.loads`, `yaml.load` (safe olmayan), `node-serialize` kullanımlarını ara.
+- **Verify:** search for `TypeNameHandling` (≠ None), `BinaryFormatter`, `pickle.loads`, unsafe `yaml.load`, `node-serialize`.
 
 ### B20 — Backend XSS (HIGH)
-- **Doğrula:**
-  - Kullanıcı HTML'i kaydediliyor ya da sunuluyor mu? Sunucu tarafında sanitizer var mı (sanitize-html, HtmlSanitizer)?
-  - `res.send(userContent)` ile `text/html` dönülüyor mu?
-  - Template'lerde raw output var mı (`<%-`, `@Html.Raw`, `{{{ }}}`)?
-- **Geçer:** API JSON dönüyor. HTML ya allowlist sanitizer'dan geçiyor ya da hiç kabul edilmiyor.
+- **Verify:**
+  - Is user HTML stored or served? Is there a server-side sanitizer (sanitize-html, HtmlSanitizer)?
+  - Does `res.send(userContent)` return `text/html`?
+  - Are there raw outputs in templates (`<%-`, `@Html.Raw`, `{{{ }}}`)?
+- **Pass:** the API returns JSON. HTML either passes an allowlist sanitizer or is not accepted at all.
 
-## D. Tarayıcı ve transport
+## D. Browser and transport
 
-### B21 — CSRF (BLOCKER, yalnızca cookie auth varsa)
-- **Geçer:** Cookie'ler `SameSite=Lax` veya `Strict`. State değiştiren isteklerde CSRF token (synchronizer veya double-submit) ya da custom header + Origin kontrolü var. GET istekleri yan etkisiz.
-- **➖ verilecek durum:** Auth yalnızca `Authorization` header ile yapılıyorsa. Bu durumda B02'ye not düş.
+### B21 — CSRF (BLOCKER, only with cookie auth)
+- **Pass:** cookies are `SameSite=Lax` or `Strict`. State-changing requests require a CSRF token (synchronizer or double-submit) or a custom header plus an Origin check. GET requests have no side effects.
+- **When ➖:** auth uses only the `Authorization` header. Add a note pointing to B02.
 
 ### B22 — CORS (BLOCKER)
-- **Doğrula:** `cors(` / `AddCors` / `Access-Control-Allow-Origin` ayarlarına bak. `origin: true`, `'*'` veya `SetIsOriginAllowed(_ => true)` var mı? Bunlardan biri `credentials` ile birlikte kullanılıyor mu?
-- **Geçer:** Prod domain'leri açıkça listeli. Origin env'den okunuyor. Gelen origin olduğu gibi geri yansıtılmıyor.
+- **Verify:** look at `cors(` / `AddCors` / `Access-Control-Allow-Origin`. Is there `origin: true`, `'*'` or `SetIsOriginAllowed(_ => true)`? Is any of them combined with `credentials`?
+- **Pass:** production domains listed explicitly, origins read from env, the incoming origin never reflected as-is.
 
 ### B23 — HTTPS (BLOCKER)
-- **Doğrula:**
-  - `http://` ile başlayan prod URL'leri ara.
-  - Redirect middleware (`UseHttpsRedirection`, proxy config) var mı?
-  - HSTS var mı?
-  - Servisler arası iletişim ve DB bağlantıları TLS kullanıyor mu?
-- **Geçer:** Trafik TLS 1.2+ ile şifreli. HTTP istekleri 301 ile HTTPS'e yönleniyor. `Strict-Transport-Security: max-age=31536000; includeSubDomains` header'ı var. Preload ancak sonra eklenmeli.
+- **Verify:**
+  - Search for production URLs starting with `http://`.
+  - Is there redirect middleware (`UseHttpsRedirection`, proxy config)?
+  - Is HSTS set?
+  - Do service-to-service and DB connections use TLS?
+- **Pass:** traffic encrypted with TLS 1.2+. HTTP redirected to HTTPS with 301 (for browser-facing apps; pure APIs should not listen on HTTP at all). `Strict-Transport-Security: max-age=31536000; includeSubDomains`. Add preload only later.
 
 ### B24 — Security headers (HIGH)
-- **Geçer:**
+- **Pass:**
   - `X-Content-Type-Options: nosniff`
-  - `frame-ancestors 'none'` veya `X-Frame-Options: DENY`
+  - `frame-ancestors 'none'` or `X-Frame-Options: DENY`
   - `Referrer-Policy: strict-origin-when-cross-origin`
   - `Permissions-Policy`
-  - HTML sunuluyorsa CSP
-  - `X-Powered-By` header'ı ve versiyonu gösteren `Server` header'ı kaldırılmış
-- **Doğrula:** Bu header'lar prod'da gerçekten dönüyor mu? `curl -sI https://<host>` ile kontrol et (canlı ortam varsa).
+  - CSP when HTML is served
+  - `X-Powered-By` and version-revealing `Server` headers removed
+- **Verify:** are these headers really returned in production? Check with `curl -sI https://<host>` if a live environment exists.
 
-### B25 — Cookie bayrakları (HIGH)
-- **Geçer:**
-  - Session cookie'si `__Host-` önekli. Bu önek Secure, Path=/ ve Domain olmamasını zorunlu kılar. Path'i daraltılmış cookie'ler (ör. refresh) `__Secure-` önekiyle de kabul edilir.
-  - `HttpOnly`, `Secure` ve `SameSite` ayarlı.
-  - Max-Age, session ömrüyle uyumlu.
+### B25 — Cookie flags (HIGH)
+- **Pass:**
+  - Session cookie uses the `__Host-` prefix, which enforces Secure, Path=/ and no Domain. Path-scoped cookies (e.g. refresh) are acceptable with `__Secure-`.
+  - `HttpOnly`, `Secure` and `SameSite` set.
+  - Max-Age consistent with the session lifetime.
 
-## E. Kötüye kullanım
+## E. Abuse
 
-### B26 — Rate limit ve kaynak sınırları (HIGH)
-- **Doğrula:**
-  - Global limiter var mı? Pahalı endpoint'lerde (arama, export, AI çağrısı, e-posta gönderimi) ayrı limit var mı?
-  - Proxy veya load balancer arkasında gerçek IP alınıyor mu (`trust proxy`, `ForwardedHeaders`)?
-  - Body parser'da limit var mı?
-  - `limit`/`pageSize` için üst sınır var mı?
-  - DB ve HTTP çağrılarında timeout var mı?
-- **Geçer:** Yukarıdakilerin hepsi var. Limit aşıldığında 429 ve `Retry-After` dönüyor.
-- **Tuzak:** `trust proxy` yanlış ayarlıysa iki sorun çıkar. Ya tüm istekler tek IP'den gelmiş görünür, ya da `X-Forwarded-For` taklit edilip limit atlatılır.
+### B26 — Rate limits and resource caps (HIGH)
+- **Verify:**
+  - Is there a global limiter? Separate limits on expensive endpoints (search, export, AI calls, email sending)?
+  - Is the real client IP used behind a proxy or load balancer (`trust proxy`, `ForwardedHeaders`)?
+  - Does the body parser have a limit?
+  - Is there a cap on `limit`/`pageSize`?
+  - Do DB and HTTP calls have timeouts?
+- **Pass:** all of the above, with 429 and `Retry-After` when a limit is hit.
+- **Pitfall:** a wrong `trust proxy` setting causes one of two problems: every request appears to come from one IP, or `X-Forwarded-For` can be spoofed to bypass the limit.
 
-## F. Dosya yükleme
+## F. File upload
 
 ### B27 — Upload (BLOCKER)
-- **Doğrula:** multer, IFormFile, busboy ve S3 putObject kullanımlarına bak.
-- **Geçer:**
-  1. Boyut limiti var.
-  2. Uzantı allowlist'i ve magic byte kontrolü var. Sadece `Content-Type` header'ına bakmak yetmez.
-  3. Dosya adı sunucuda üretiliyor (UUID). `originalname` dosya yolunda kullanılmıyor.
-  4. Dosyalar web root dışında veya private bucket'ta tutuluyor ve kısa ömürlü signed URL ile sunuluyor.
-  5. Görseller re-encode ediliyor ve EXIF siliniyor.
-  6. SVG ve HTML ya reddediliyor ya da `Content-Disposition: attachment` ve `nosniff` ile sunuluyor.
-  7. Upload için kullanıcı başına kota var.
-  8. Malware taraması yapılıyor (önerilir).
+- **Verify:** look at multer, IFormFile, busboy and S3 putObject usage.
+- **Pass:**
+  1. Size limit.
+  2. Extension allowlist and magic-byte check. Looking only at the `Content-Type` header is not enough.
+  3. File name generated server-side (UUID). `originalname` never used in a path.
+  4. Files kept outside the web root or in a private bucket and served via short-lived signed URLs.
+  5. Images re-encoded and EXIF stripped.
+  6. SVG and HTML rejected, or served with `Content-Disposition: attachment` and `nosniff`.
+  7. Per-user upload quota.
+  8. Malware scanning (recommended).
 
-## G. Secret yönetimi
+## G. Secrets
 
-### B28 — Secret (BLOCKER)
-- **Doğrula:**
-  - `.gitignore` içinde `.env*` var mı (`!.env.example` hariç)?
-  - Repoda `sk_live|sk-|AKIA|-----BEGIN|password=|ConnectionStrings` desenlerini ara.
-  - `appsettings.json` içinde secret var mı?
-  - Git varsa `gitleaks detect` ile geçmişi tara.
-- **Git yoksa:** Geçmiş taraması ❓ olur. Ignore edilmemiş `.env` dosyası yine de ❌ sebebidir.
-- **Geçer:** Prod secret'ları secret manager'da (Vault, AWS SM, Azure Key Vault, Doppler) veya platformun env ayarlarında. Repoda yalnızca `.env.example` var. Her ortamın secret'ı ayrı. Anahtarlar minimum yetkili (ör. Stripe restricted key).
-- **Sızıntı varsa:** İlk adım **rotate** etmektir. Dosyadan veya geçmişten silmek tek başına yetmez.
+### B28 — Secrets (BLOCKER)
+- **Verify:**
+  - Does `.gitignore` include `.env*` (except `!.env.example`)?
+  - Search the repo for `sk_live|sk-|AKIA|-----BEGIN|password=|ConnectionStrings`.
+  - Any secrets in `appsettings.json`?
+  - If git exists, scan history with `gitleaks detect`.
+- **No git:** history scanning is ❓. A non-ignored `.env` file is still a reason for ❌.
+- **Pass:** production secrets in a secret manager (Vault, AWS SM, Azure Key Vault, Doppler) or the platform's env settings. Only `.env.example` in the repo. Separate secrets per environment. Keys with least privilege (e.g. Stripe restricted keys).
+- **If leaked:** the first step is to **rotate**. Deleting it from the file or history is not enough on its own.
 
-## H. Hata ve log
+## H. Errors and logging
 
 ### B29 — Exception handling (BLOCKER)
-- **Doğrula:**
-  - Global handler'ın döndüğü yanıtta `err.stack`, `err.message` veya `ex.ToString()` var mı?
-  - Express 4'te async route'larda hata yakalama var mı? Yoksa unhandled rejection process'i çökertebilir. (Express 5 bunu kendisi yakalar.)
-  - `process.on('unhandledRejection')` veya bir log stratejisi var mı?
-- **Geçer:** Kullanıcıya `{ error: "Beklenmeyen hata", correlationId }` dönüyor. Detay sunucu log'una yazılıyor. Tek bir hatalı istek process'i düşürmüyor.
+- **Verify:**
+  - Does the global handler's response include `err.stack`, `err.message` or `ex.ToString()`?
+  - In Express 4, are errors in async routes caught? Otherwise an unhandled rejection can crash the process. (Express 5 catches them itself.)
+  - Is there `process.on('unhandledRejection')` or another logging strategy?
+- **Pass:** the user gets `{ error: "Unexpected error", correlationId }`. Details go to the server log. A single bad request cannot take the process down.
 
-### B30 — Prod config (BLOCKER)
-- **Doğrula:**
-  - `NODE_ENV`/`ASPNETCORE_ENVIRONMENT` değerine bak.
-  - `UseDeveloperExceptionPage`, Swagger veya GraphQL introspection prod'da açık mı?
-  - Seed'de admin/admin gibi default kullanıcı var mı?
-  - Debug endpoint'leri var mı (`/debug`, `/test`, `/env`)?
-- **Geçer:** Hepsi kapalı ya da auth arkasında.
+### B30 — Production config (BLOCKER)
+- **Verify:**
+  - Check `NODE_ENV`/`ASPNETCORE_ENVIRONMENT`.
+  - Are `UseDeveloperExceptionPage`, Swagger/OpenAPI UI or GraphQL introspection enabled in production?
+  - Do seeds contain default users such as admin/admin?
+  - Are there debug endpoints (`/debug`, `/test`, `/env`)?
+- **Pass:** all off, or behind auth.
 
 ### B31 — Audit log (HIGH)
-- **Geçer:**
-  - Şu olaylar `who/what/when/ip/result` alanlarıyla yapılandırılmış log olarak yazılıyor: login başarı ve başarısızlık, parola değişimi ve sıfırlama, MFA değişikliği, rol değişikliği, admin işlemleri, veri export'u.
-  - Log'larda parola, token, kart numarası ve tam TCKN yok (maskeleme veya redaction ile).
-  - Log'lar merkezi ve append-only bir yerde toplanıyor, saklama süresi tanımlı.
-  - Anomalilerde alarm üretiliyor (ör. başarısız login'lerde ani artış).
+- **Pass:**
+  - These events are written as structured logs with `who/what/when/ip/result`: login success and failure, password change and reset, MFA changes, role changes, admin actions, data exports.
+  - No passwords, tokens, card numbers or national ID numbers in logs (masked or redacted).
+  - Logs collected centrally in append-only storage with a defined retention.
+  - Anomalies raise alerts (e.g. a spike in failed logins).
 
-## I. Veritabanı
+## I. Database
 
-### B32 — DB erişimi (BLOCKER)
-- **Doğrula:**
-  - Connection string'deki kullanıcıya bak: `postgres`, `sa`, `root` ise ❌.
-  - Parolaya bak: varsayılan değer ise ❌.
-  - Host'a bak: public ise ❓ (ağ kuralını sor).
-  - `sslmode`/`Encrypt=true` ayarına bak.
-- **Geçer:** DB private network'te (SG/firewall yalnızca uygulamaya izin veriyor). Uygulama kullanıcısı yalnızca DML yetkisine sahip. Migration ayrı bir kullanıcıyla çalışıyor. Bağlantı TLS ile.
+### B32 — DB access (BLOCKER)
+- **Verify:**
+  - Check the user in the connection string: `postgres`, `sa`, `root` → ❌.
+  - Check the password: a default value → ❌.
+  - Check the host: if public → ❓ (ask about network rules).
+  - Check `sslmode`/`Encrypt=true`.
+- **Pass:** the DB is on a private network (SG/firewall allows only the app). The app user has DML rights only. Migrations run under a separate user. Connections use TLS.
 
-### B33 — BaaS kuralları (BLOCKER)
-- **Neden:** Supabase veya Firebase'de tarayıcı DB'ye doğrudan bağlanır. Kural yoksa herkes her şeyi okur ve yazar.
-- **Doğrula:**
-  - Supabase: her tabloda `alter table ... enable row level security` var mı? Policy'ler `auth.uid()` ile sınırlanmış mı? `service_role` key client kodunda var mı?
-  - Firebase: `firestore.rules`/`storage.rules` içinde `allow read, write: if true` veya tarih bazlı test kuralı var mı?
-- **Geçer:** Her tabloda RLS açık ve varsayılan deny. Anon key ile yapılan negatif testte başka kullanıcının verisi okunamıyor.
-- **➖ verilecek durum:** Tarayıcı DB'ye hiç doğrudan erişmiyorsa.
+### B33 — BaaS rules (BLOCKER)
+- **Why:** with Supabase or Firebase the browser talks to the DB directly. Without rules, anyone can read and write everything.
+- **Verify:**
+  - Supabase: does every table have `alter table ... enable row level security`? Are policies scoped with `auth.uid()`? Is the `service_role` key anywhere in client code?
+  - Firebase: do `firestore.rules`/`storage.rules` contain `allow read, write: if true` or a date-based test rule?
+- **Pass:** RLS on every table with default deny. A negative test with the anon key cannot read another user's data.
+- **When ➖:** the browser never accesses the DB directly.
 
-### B34 — Şifreleme ve migration (MEDIUM)
-- **Geçer:** Disk ve at-rest şifreleme açık. TCKN, sağlık ve finans gibi hassas alanlar uygulama seviyesinde şifreli. Şema değişiklikleri versiyonlu migration'larla yapılıyor.
+### B34 — Encryption and migrations (MEDIUM)
+- **Pass:** disk/at-rest encryption on. Sensitive fields such as national IDs, health and financial data encrypted at the application level. Schema changes go through versioned migrations.
 
 ## J. Backup
 
-### B35 — Backup ve restore (BLOCKER, çoğunlukla ❓)
-- **Geçer:**
-  - Backup otomatik (PITR tercih edilir) ve şifreli.
-  - Backup'lar farklı bir hesapta veya bölgede, silinmeye karşı korumalı (immutable veya object lock).
-  - Retention tanımlı.
-  - **Son 3 ay içinde restore testi yapılmış** ve süresi ölçülmüş.
-  - RPO ve RTO yazılı.
-- **Not:** Koddan genelde görünmez. ❓ olarak işaretle ve sahibine "son restore testi ne zamandı?" diye sor.
+### B35 — Backup and restore (BLOCKER, usually ❓)
+- **Pass:**
+  - Backups automatic (PITR preferred) and encrypted.
+  - Backups in a different account or region, protected against deletion (immutable or object lock).
+  - Retention defined.
+  - **A restore test within the last 3 months**, with the duration measured.
+  - RPO and RTO written down.
+- **Note:** usually not visible in code. Mark ❓ and ask the owner "when was the last restore test?"
 
-## K. Tedarik zinciri ve CI
+## K. Supply chain and CI
 
-### B36 — Dependency (HIGH)
-- **Doğrula:** `npm audit --omit=dev`, `dotnet list package --vulnerable --include-transitive`, `pip-audit` çalıştır (ağ erişimi varsa). Lockfile var mı? Dependabot veya Renovate config'i var mı?
-- **Geçer:** Kritik veya yüksek seviyede çözülmemiş CVE yok. Lockfile commit'li. Otomatik güncelleme açık.
-- **Not:** Komut çalıştırılamadıysa versiyonlara bakarak tahmin yap, sonucu ⚠️ olarak yaz ve "doğrulanmadı" diye belirt.
+### B36 — Dependencies (HIGH)
+- **Verify:** run `npm audit --omit=dev`, `dotnet list package --vulnerable --include-transitive` or `pip-audit` (if network access exists). Is there a lockfile? A Dependabot or Renovate config?
+- **Pass:** no unresolved critical or high CVEs. Lockfile committed. Automated updates enabled.
+- **Note:** if the command could not run, estimate from versions, mark ⚠️ and say "not verified".
 
-### B37 — CI güvenlik (HIGH)
-- **Doğrula:** `.github/workflows`, `.gitlab-ci.yml`, `azure-pipelines.yml` dosyalarına bak:
-  - CodeQL veya Semgrep var mı?
-  - gitleaks veya trufflehog var mı?
-  - Trivy veya Grype var mı?
-  - IaC scan (checkov/tfsec) var mı?
-  - Bulgu build'i kırıyor mu?
-- **Geçer:** Yukarıdaki taramalar var ve kritik bulgu build'i kırıyor. Main branch protected, PR review zorunlu. CI secret'ları ortam bazında ve minimum yetkili. Workflow'larda `pull_request_target` ile güvensiz checkout yapılmıyor.
+### B37 — CI security (HIGH)
+- **Verify:** look at `.github/workflows`, `.gitlab-ci.yml`, `azure-pipelines.yml`:
+  - CodeQL or Semgrep?
+  - gitleaks or trufflehog?
+  - Trivy or Grype?
+  - IaC scanning (checkov/tfsec)?
+  - Do findings fail the build?
+- **Pass:** the scans above exist and critical findings fail the build. Main branch protected, PR review required. CI secrets scoped per environment with least privilege. No unsafe checkout with `pull_request_target`.
 
-## L. Operasyon ve mevzuat
+## L. Operations and privacy
 
-### B38 — Health ve monitoring (HIGH)
-- **Doğrula:** Health endpoint config, env, versiyon veya connection string döndürüyor mu? Uptime ve error-rate alarmı var mı?
-- **Geçer:** Health yalnızca `{status:"ok"}` döndürüyor. Detaylı health bilgisi iç ağda veya auth arkasında. Uptime monitörü, hata oranı ve latency alarmları kurulu. Alarmların bir sorumlusu var.
+### B38 — Health and monitoring (HIGH)
+- **Verify:** does the health endpoint return config, env, versions or connection strings? Are there uptime and error-rate alerts?
+- **Pass:** health returns only `{status:"ok"}`. Detailed health only on the internal network or behind auth. Uptime monitor plus error-rate and latency alerts, each with an owner.
 
-### B39 — KVKK / GDPR (HIGH)
-- **Geçer:**
-  - Yalnızca gereken veri toplanıyor.
-  - Kullanıcının verisini silme ve export etme akışı var. Silme işlemi backup ve log politikasıyla uyumlu.
-  - Saklama süreleri tanımlı ve süre dolunca veri otomatik siliniyor.
-  - Açık rıza alınıyorsa ne zaman, hangi metin versiyonuyla ve hangi IP'den alındığı kaydediliyor.
-  - Yurt dışına aktarım (KVKK md. 9; Google, Stripe, OpenAI vb.) için hukuki dayanak var.
-  - Veri işleyenlerle DPA imzalanmış.
-  - VERBİS yükümlülüğü değerlendirilmiş.
-- **Not:** Hukuki kısım ❓ olarak işaretlenir. Kod tarafında silme/export endpoint'i ve consent kaydı aranır.
+### B39 — Privacy compliance (HIGH)
+- **Pass (jurisdiction-agnostic core):**
+  - Only the data that is needed is collected.
+  - Users' data can be deleted and exported. Deletion is consistent with the backup and log policy.
+  - Retention periods are defined and expired data is deleted automatically.
+  - When consent is collected, the time, the text version and the source are recorded.
+  - Cross-border transfers (Google, Stripe, OpenAI, cloud providers, etc.) have a legal basis.
+  - Data processing agreements (DPAs) are signed with processors.
+- **Jurisdiction specifics:** identify the target markets (user statement, locales, currencies, legal pages). For the details of each market, read the matching file from the `prod-ready-frontend` skill: `../prod-ready-frontend/references/privacy-eu.md` (GDPR) and `../prod-ready-frontend/references/privacy-tr.md` (KVKK). Their "Backend" sections apply to B39.
+- **Note:** legal adequacy is ❓. On the code side, look for deletion/export endpoints, retention jobs and consent records.
