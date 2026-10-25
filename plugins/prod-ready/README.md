@@ -24,12 +24,21 @@ Reports are written in the language you write in. Privacy items are checked agai
 
 ## Installation
 
+Inside a Claude Code session:
+
+```text
+/plugin marketplace add Puyz/prod-ready-plugin
+/plugin install prod-ready@prod-ready-marketplace
+```
+
+Or from a terminal:
+
 ```bash
 claude plugin marketplace add Puyz/prod-ready-plugin
 claude plugin install prod-ready@prod-ready-marketplace
 ```
 
-Start a new session after installing. If you previously copied the same skills into `~/.claude/skills/`, remove those copies so they don't appear twice.
+Start a new session after installing. Full documentation: [repository README](https://github.com/Puyz/prod-ready-plugin#readme). If you previously copied the same skills into `~/.claude/skills/`, remove those copies so they don't appear twice.
 
 ## Limits
 
