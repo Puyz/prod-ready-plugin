@@ -1,0 +1,18 @@
+{
+  "name": "prod-ready-marketplace",
+  "owner": {
+    "name": "Ömer Temel",
+    "email": "42616536+Puyz@users.noreply.github.com"
+  },
+  "metadata": {
+    "description": "Production readiness checklists (backend + web frontend) for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "prod-ready",
+      "source": "./plugins/prod-ready",
+      "description": "Backend and frontend production readiness checklists with build and audit modes.",
+      "version": "1.0.0"
+    }
+  ]
+}

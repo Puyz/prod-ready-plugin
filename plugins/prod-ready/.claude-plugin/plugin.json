@@ -1,0 +1,11 @@
+{
+  "name": "prod-ready",
+  "version": "1.0.0",
+  "description": "Production readiness checklists for backend (39 items: auth, authorization, injection, secrets, upload, logging, DB, backup, CI) and web frontend (29 items: security, SEO, error states, KVKK/GDPR, analytics, a11y, performance). Applies the rules while coding and produces an evidence-based GO/NO-GO audit report.",
+  "author": {
+    "name": "Ömer Temel",
+    "email": "42616536+Puyz@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "keywords": ["security", "production", "checklist", "audit", "owasp", "kvkk", "gdpr", "seo", "launch"]
+}
